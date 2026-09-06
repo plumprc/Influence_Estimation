@@ -1,4 +1,4 @@
-"""Exp 5b: Step-size sweep on CIFAR-10 with SimpleCNN.
+"""Exp 5d: Step-size sweep on CIFAR-10 with SimpleCNN.
 
 Replicates Exp 3's core finding: first-order approximation degrades for
 nonlinear behaviors as step size increases, while linear behaviors remain robust.
@@ -22,15 +22,34 @@ from influence.metrics import compare_scores
 from influence.models import SimpleCNN
 
 
+def _torch_dtype(name: str) -> torch.dtype:
+    return {"float32": torch.float32, "float64": torch.float64}[name]
+
+
+def _save_npz_atomic(path: Path, **arrays) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    with temporary_path.open("wb") as stream:
+        np.savez_compressed(stream, **arrays)
+    temporary_path.replace(path)
+
+
+def _save_json_atomic(path: Path, value: dict) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
+    temporary_path.replace(path)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Exp 5b: CIFAR-10 step-size sweep")
+    parser = argparse.ArgumentParser(description="Exp 5d: CIFAR-10 step-size sweep")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--dtype", choices=("float32", "float64"), default="float64")
     parser.add_argument("--data-root", type=str, default="datasets/CIFAR10")
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/cifar10/exp5b_cifar10_stepsize/seed_0",
+        default="outputs/cifar10/exp5d_cifar10_stepsize/seed_0",
     )
 
     # Data (smaller for sweep)
@@ -50,6 +69,7 @@ def main():
                         default=[0.01, 0.05, 0.1, 0.3, 0.5])
 
     args = parser.parse_args()
+    dtype = _torch_dtype(args.dtype)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -58,7 +78,7 @@ def main():
     output_dir = PROJECT_ROOT / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== Exp 5b: CIFAR-10 Step-Size Sweep (seed {args.seed}) ===\n")
+    print(f"=== Exp 5d: CIFAR-10 Step-Size Sweep (seed {args.seed}) ===\n")
 
     # Load data
     print(f"Loading CIFAR-10 from {data_root}")
@@ -69,7 +89,7 @@ def main():
         seed=args.seed,
         normalization="unit",
         device=args.device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
 
     print(f"Train: {data.train_x.shape[0]}, Test: {data.test_x.shape[0]}\n")
@@ -80,7 +100,7 @@ def main():
         n_classes=10,
         l2=args.l2,
         device=args.device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
 
     result = model.fit(
@@ -126,11 +146,10 @@ def main():
             step_size=eta,
         )
 
-        # Store scores for this eta
-        all_scores[f"eta_{eta}"] = {
-            "exact": exact.cpu().numpy(),
-            "first_order": first_order.cpu().numpy(),
-        }
+        # Store flat arrays so the archive never requires object pickle loading.
+        eta_key = f"eta_{eta}"
+        all_scores[f"{eta_key}_exact"] = exact.cpu().numpy()
+        all_scores[f"{eta_key}_first_order"] = first_order.cpu().numpy()
 
         # Compute approximation quality for each behavior
         sweep_results[eta] = {}
@@ -139,16 +158,14 @@ def main():
             approx_scores = first_order[:, :, behavior_idx].cpu().numpy()
 
             # Compare per query and aggregate
-            nrmses, taus, signs, overlaps = [], [], [], []
+            taus, signs, overlaps = [], [], []
             for q_idx in range(exact_scores.shape[0]):
                 comp = compare_scores(exact_scores[q_idx], approx_scores[q_idx])
-                nrmses.append(comp["nrmse"])
                 taus.append(comp["kendall_tau"])
                 signs.append(comp["sign_accuracy"])
                 overlaps.append(comp["top_5pct_overlap"])
 
             sweep_results[eta][behavior] = {
-                "nrmse": float(np.mean(nrmses)),
                 "kendall_tau": float(np.mean(taus)),
                 "sign_accuracy": float(np.mean(signs)),
                 "top_5pct_overlap": float(np.mean(overlaps)),
@@ -157,12 +174,12 @@ def main():
         # Print summary for negative_loss and target_logit
         neg_loss_metrics = sweep_results[eta]["negative_loss"]
         target_logit_metrics = sweep_results[eta]["target_logit"]
-        print(f"  negative_loss: NRMSE={neg_loss_metrics['nrmse']:.3f}, τ={neg_loss_metrics['kendall_tau']:.3f}")
-        print(f"  target_logit:  NRMSE={target_logit_metrics['nrmse']:.3f}, τ={target_logit_metrics['kendall_tau']:.3f}")
+        print(f"  negative_loss: τ={neg_loss_metrics['kendall_tau']:.3f}")
+        print(f"  target_logit:  τ={target_logit_metrics['kendall_tau']:.3f}")
 
     # Save all scores
     scores_path = output_dir / "scores.npz"
-    np.savez(scores_path, **all_scores, candidates=candidates.cpu().numpy())
+    _save_npz_atomic(scores_path, **all_scores, candidates=candidates.cpu().numpy())
 
     # Save summary
     summary = {
@@ -181,13 +198,13 @@ def main():
             "transition": "one-step sweep",
             "behaviors": list(BEHAVIORS),
             "step_sizes": args.step_sizes,
+            "precision": args.dtype,
         },
         "sweep_results": sweep_results,
     }
 
     summary_path = output_dir / "summary.json"
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
+    _save_json_atomic(summary_path, summary)
 
     print(f"\n✓ Results saved to {output_dir}")
     print(f"  - {scores_path.name}")

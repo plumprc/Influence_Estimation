@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -328,6 +329,86 @@ def _stable_cholesky(hessian: torch.Tensor, max_tries: int = 6) -> torch.Tensor:
     )
 
 
+def _upweight_hessian_factor(
+    model: MultinomialLogisticRegression,
+    parameters: torch.Tensor,
+    train_x: torch.Tensor,
+    candidate_index: int,
+) -> torch.Tensor:
+    """Return B with B.T @ B equal to one example's parameter Hessian.
+
+    The logistic-loss Hessian with respect to logits has rank at most C-1.
+    Its nonzero eigenpairs therefore give a compact representation of the
+    upweight term, avoiding a full-rank Hessian update for every candidate.
+    """
+
+    n_features = train_x.shape[1]
+    n_classes = model.n_classes
+    weight_size = n_classes * n_features
+    weights, bias = model._unpack(parameters, n_features)
+    x = train_x[candidate_index]
+    logits = x @ weights.T + bias
+    probabilities = torch.softmax(logits, dim=0)
+    hessian_logits = torch.diag(probabilities) - torch.outer(
+        probabilities, probabilities
+    )
+    # cuSOLVER's tiny symmetric eigensolver occasionally crashed after many
+    # invocations on V100/CUDA 11.8. The matrix is only C x C, so computing it
+    # on the CPU is inexpensive and keeps the GPU path deterministic.
+    eigenvalues, eigenvectors = torch.linalg.eigh(hessian_logits.detach().cpu())
+    threshold = max(float(eigenvalues.max()) * 1e-14, 1e-16)
+    keep = eigenvalues > threshold
+    if not bool(keep.any()):
+        # A saturated softmax distribution can have an exactly-zero rank-(C-1)
+        # Hessian in floating point. The upweighted objective then contributes
+        # only a linear term, so the base Hessian solve is the correct update.
+        return torch.empty(
+            (0, weight_size + n_classes), dtype=model.dtype, device=model.device
+        )
+
+    eigenvectors = eigenvectors.to(device=model.device)
+    coefficients = (
+        torch.sqrt(eigenvalues[keep].to(device=model.device)).unsqueeze(1)
+        * eigenvectors[:, keep].T
+    )
+    factor = torch.empty(
+        (coefficients.shape[0], weight_size + n_classes),
+        dtype=model.dtype,
+        device=model.device,
+    )
+    for row, coefficient in enumerate(coefficients):
+        factor[row, :weight_size] = torch.outer(coefficient, x).reshape(-1)
+        factor[row, weight_size:] = coefficient
+    return factor
+
+
+def _solve_updated_upweight_newton_step(
+    gradient: torch.Tensor,
+    factor: torch.Tensor,
+    base_cholesky: torch.Tensor,
+    extra_weight: float,
+) -> torch.Tensor:
+    """Solve (H0 + alpha B.T B) step with the Woodbury identity."""
+
+    if factor.shape[0] == 0:
+        return torch.cholesky_solve(
+            gradient.unsqueeze(1), base_cholesky
+        ).squeeze(1)
+
+    inverse_gradient = torch.cholesky_solve(
+        gradient.unsqueeze(1), base_cholesky
+    ).squeeze(1)
+    inverse_factor_transpose = torch.cholesky_solve(factor.T, base_cholesky)
+    small_matrix = factor @ inverse_factor_transpose
+    small_matrix += torch.eye(
+        small_matrix.shape[0], dtype=small_matrix.dtype, device=small_matrix.device
+    ) / extra_weight
+    correction = torch.linalg.solve(
+        small_matrix, factor @ inverse_gradient
+    )
+    return inverse_gradient - inverse_factor_transpose @ correction
+
+
 def newton_refine_factual(
     model: MultinomialLogisticRegression,
     train_x: torch.Tensor,
@@ -377,11 +458,14 @@ def newton_reopt_influences(
     cholesky: Optional[torch.Tensor] = None,
     tol: float = 1e-12,
     max_iter: int = 200,
+    update_perturbation_hessian: bool = False,
 ) -> tuple[torch.Tensor, dict]:
-    """Exact reoptimization reference via fixed-Hessian (chord) Newton solves.
+    """Reoptimization reference with chord or updated-upweight Newton solves.
 
     For each candidate, reoptimizes the epsilon-upweighted objective to near
-    machine precision and records the exact behavior changes at the queries.
+    machine precision and records the behavior changes at the queries. The
+    default chord mode reuses the factual Hessian; the updated mode also
+    refreshes the rank-(C-1) Hessian of the upweighted example at every step.
     The model is expected to already sit at a refined factual optimum (call
     :func:`newton_refine_factual` first); it is not modified here. Returns a
     ``(n_queries, n_candidates, len(BEHAVIORS))`` tensor plus diagnostics.
@@ -403,19 +487,46 @@ def newton_reopt_influences(
     baseline = behavior_values(model, query_x, query_y)
     output = torch.empty((query_x.shape[0], candidates.numel(), len(BEHAVIORS)), dtype=model.dtype, device=model.device)
     residual_norms = []
+    iteration_counts = []
+    worst_candidate_index = -1
+    worst_residual_norm = float("-inf")
     counterfactual = model.copy()
     for position, candidate in enumerate(candidates.tolist()):
         theta = theta_factual.clone()
         converged_norm = float("nan")
-        for _ in range(max_iter):
-            _, grad = model._objective_and_gradient(
+        iterations = 0
+        for iterations in range(1, max_iter + 1):
+            objective, grad = model._objective_and_gradient(
                 theta, train_x, train_y, extra_index=candidate, extra_weight=epsilon,
             )
             converged_norm = float(grad.norm())
             if converged_norm < tol:
                 break
-            theta = theta - torch.cholesky_solve(grad.unsqueeze(1), cholesky).squeeze(1)
+            if update_perturbation_hessian:
+                factor = _upweight_hessian_factor(model, theta, train_x, candidate)
+                step = _solve_updated_upweight_newton_step(
+                    grad, factor, cholesky, epsilon
+                )
+            else:
+                step = torch.cholesky_solve(grad.unsqueeze(1), cholesky).squeeze(1)
+            directional_derivative = -torch.dot(grad, step)
+            if float(directional_derivative) >= 0.0:
+                raise RuntimeError("Newton step is not a descent direction")
+            step_size = 1.0
+            while step_size >= 1e-4:
+                trial = theta - step_size * step
+                trial_objective, _ = model._objective_and_gradient(
+                    trial, train_x, train_y, extra_index=candidate, extra_weight=epsilon,
+                )
+                if float(trial_objective) <= float(objective) + 1e-4 * step_size * float(directional_derivative):
+                    break
+                step_size *= 0.5
+            theta = theta - step_size * step
         residual_norms.append(converged_norm)
+        iteration_counts.append(iterations)
+        if converged_norm > worst_residual_norm:
+            worst_candidate_index = candidate
+            worst_residual_norm = converged_norm
         counterfactual.weights, counterfactual.bias = counterfactual._unpack(theta, n_features)
         values = behavior_values(counterfactual, query_x, query_y)
         for behavior_position, behavior in enumerate(BEHAVIORS):
@@ -424,6 +535,11 @@ def newton_reopt_influences(
         "factual_gradient_norm": float(grad0.norm()),
         "max_candidate_gradient_norm": max(residual_norms),
         "mean_candidate_gradient_norm": float(sum(residual_norms) / len(residual_norms)),
+        "max_candidate_iterations": max(iteration_counts),
+        "mean_candidate_iterations": float(
+            sum(iteration_counts) / len(iteration_counts)
+        ),
+        "worst_candidate_index": worst_candidate_index,
     }
     return output, diagnostics
 
@@ -630,6 +746,217 @@ def cnn_one_step_influences(
     return exact, first_order, candidates
 
 
+def cnn_multi_step_influences(
+    model: nn.Module,
+    train_x: torch.Tensor,
+    train_y: torch.Tensor,
+    query_x: torch.Tensor,
+    query_y: torch.Tensor,
+    *,
+    candidate_indices: Optional[Iterable[int]] = None,
+    step_size: float = 0.1,
+    num_steps: int = 5,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute exact finite K-step effects for a CNN.
+
+    Each candidate receives ``num_steps`` consecutive full-gradient updates on
+    its unregularized example loss, starting from the factual parameters.
+    Returns ``(n_queries, n_candidates, len(BEHAVIORS))`` behavior changes and
+    the candidate indices.
+    """
+
+    if step_size <= 0:
+        raise ValueError("step_size must be positive")
+    if num_steps <= 0:
+        raise ValueError("num_steps must be positive")
+
+    device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
+    train_x = torch.as_tensor(train_x, dtype=dtype, device=device)
+    train_y = torch.as_tensor(train_y, dtype=torch.long, device=device)
+    query_x = torch.as_tensor(query_x, dtype=dtype, device=device)
+    query_y = torch.as_tensor(query_y, dtype=torch.long, device=device)
+    if train_x.ndim == 2 and train_x.shape[1] == 3072:
+        train_x = train_x.view(-1, 3, 32, 32)
+    if query_x.ndim == 2 and query_x.shape[1] == 3072:
+        query_x = query_x.view(-1, 3, 32, 32)
+
+    if candidate_indices is None:
+        candidates = torch.arange(train_x.shape[0], dtype=torch.long, device=device)
+    else:
+        candidates = torch.as_tensor(list(candidate_indices), dtype=torch.long, device=device)
+
+    baseline = cnn_behavior_values(model, query_x, query_y)
+    output = torch.empty(
+        (query_x.shape[0], candidates.numel(), len(BEHAVIORS)),
+        dtype=dtype,
+        device=device,
+    )
+    original_params = {name: parameter.data.clone() for name, parameter in model.named_parameters()}
+
+    try:
+        for candidate_position, candidate in enumerate(candidates.tolist()):
+            with torch.no_grad():
+                for name, parameter in model.named_parameters():
+                    parameter.data.copy_(original_params[name])
+
+            x_candidate = train_x[candidate : candidate + 1]
+            y_candidate = train_y[candidate : candidate + 1]
+            for _ in range(num_steps):
+                model.zero_grad(set_to_none=True)
+                model.train()
+                loss = F.cross_entropy(model(x_candidate), y_candidate)
+                loss.backward()
+                with torch.no_grad():
+                    for parameter in model.parameters():
+                        if parameter.grad is not None:
+                            parameter.data.sub_(step_size * parameter.grad)
+
+            values = cnn_behavior_values(model, query_x, query_y)
+            for behavior_position, behavior in enumerate(BEHAVIORS):
+                output[:, candidate_position, behavior_position] = values[behavior] - baseline[behavior]
+    finally:
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                parameter.data.copy_(original_params[name])
+        model.eval()
+
+    return output, candidates
+
+
+def cnn_local_reopt_upweight_influences(
+    model: nn.Module,
+    train_x: torch.Tensor,
+    train_y: torch.Tensor,
+    query_x: torch.Tensor,
+    query_y: torch.Tensor,
+    *,
+    candidate_indices: Iterable[int],
+    alpha: float,
+    l2: float,
+    max_iter: int = 5,
+    method: str = "lbfgs",
+    lr: float = 1.0,
+) -> tuple[torch.Tensor, dict, torch.Tensor]:
+    """Measure behavior changes after local full-batch reoptimization.
+
+    The perturbed objective is the full-batch regularized training objective
+    plus ``alpha`` times the selected candidate loss. Optimization starts from
+    the factual parameters. In a non-convex CNN this is a local reoptimization
+    reference, not a global retraining solution.
+    """
+
+    if alpha <= 0:
+        raise ValueError("alpha must be positive")
+    if max_iter <= 0:
+        raise ValueError("max_iter must be positive")
+    if method not in ("lbfgs", "adam"):
+        raise ValueError("method must be 'lbfgs' or 'adam'")
+
+    device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
+    train_x = torch.as_tensor(train_x, dtype=dtype, device=device)
+    train_y = torch.as_tensor(train_y, dtype=torch.long, device=device)
+    query_x = torch.as_tensor(query_x, dtype=dtype, device=device)
+    query_y = torch.as_tensor(query_y, dtype=torch.long, device=device)
+    if train_x.ndim == 2 and train_x.shape[1] == 3072:
+        train_x = train_x.view(-1, 3, 32, 32)
+    if query_x.ndim == 2 and query_x.shape[1] == 3072:
+        query_x = query_x.view(-1, 3, 32, 32)
+
+    candidates = torch.as_tensor(list(candidate_indices), dtype=torch.long, device=device)
+    baseline = cnn_behavior_values(model, query_x, query_y)
+    output = torch.empty(
+        (query_x.shape[0], candidates.numel(), len(BEHAVIORS)),
+        dtype=dtype,
+        device=device,
+    )
+    original_params = {name: parameter.data.clone() for name, parameter in model.named_parameters()}
+
+    def _l2_penalty() -> torch.Tensor:
+        penalty = torch.tensor(0.0, dtype=dtype, device=device)
+        for name, parameter in model.named_parameters():
+            if "weight" in name:
+                penalty = penalty + 0.5 * l2 * torch.sum(parameter * parameter)
+        return penalty
+
+    closure_calls_per_candidate = []
+    final_objectives = []
+    final_gradient_norms = []
+
+    try:
+        for candidate_position, candidate in enumerate(candidates.tolist()):
+            with torch.no_grad():
+                for name, parameter in model.named_parameters():
+                    parameter.data.copy_(original_params[name])
+
+            if method == "lbfgs":
+                optimizer = torch.optim.LBFGS(
+                    model.parameters(),
+                    lr=lr,
+                    max_iter=max_iter,
+                    tolerance_grad=1e-5,
+                    tolerance_change=1e-9,
+                    line_search_fn="strong_wolfe",
+                )
+            else:
+                optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+            x_candidate = train_x[candidate : candidate + 1]
+            y_candidate = train_y[candidate : candidate + 1]
+
+            def closure() -> torch.Tensor:
+                nonlocal closure_calls
+                optimizer.zero_grad(set_to_none=True)
+                model.train()
+                logits = model(train_x)
+                objective = F.cross_entropy(logits, train_y) + _l2_penalty()
+                objective = objective + alpha * F.cross_entropy(
+                    model(x_candidate), y_candidate
+                )
+                objective.backward()
+                closure_calls += 1
+                return objective
+
+            closure_calls = 0
+            if method == "lbfgs":
+                optimizer.step(closure)
+            else:
+                for _ in range(max_iter):
+                    optimizer.step(closure)
+
+            final_objective = float(closure().detach().cpu())
+            final_gradient_norm = float(
+                torch.sqrt(
+                    sum(
+                        torch.sum(parameter.grad * parameter.grad)
+                        for parameter in model.parameters()
+                        if parameter.grad is not None
+                    )
+                ).detach().cpu()
+            )
+            closure_calls_per_candidate.append(closure_calls)
+            final_objectives.append(final_objective)
+            final_gradient_norms.append(final_gradient_norm)
+            values = cnn_behavior_values(model, query_x, query_y)
+            for behavior_position, behavior in enumerate(BEHAVIORS):
+                output[:, candidate_position, behavior_position] = values[behavior] - baseline[behavior]
+    finally:
+        with torch.no_grad():
+            for name, parameter in model.named_parameters():
+                parameter.data.copy_(original_params[name])
+        model.eval()
+
+    diagnostics = {
+        "closure_calls": closure_calls_per_candidate,
+        "final_objective": final_objectives,
+        "final_gradient_norm": final_gradient_norms,
+        "mean_final_gradient_norm": float(np.mean(final_gradient_norms)),
+        "max_final_gradient_norm": float(np.max(final_gradient_norms)),
+    }
+    return output, diagnostics, candidates
+
+
 def cnn_ihvp_influences(
     model: nn.Module,
     train_x: torch.Tensor,
@@ -641,13 +968,24 @@ def cnn_ihvp_influences(
     damping: float = 1e-2,
     max_cg_iters: int = 10,
     cg_tol: float = 1e-5,
+    behaviors: Optional[Iterable[str]] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute IF-style influences using IHVP (conjugate gradient).
 
+    The Hessian is taken with respect to the regularized training objective
+    used by ``SimpleCNN.fit``; damping is added on top of that Hessian.
+
     Returns:
-        influences: (n_queries, n_candidates, 4) IF influence estimates
+        influences: (n_queries, n_candidates, len(behaviors)) IF influence estimates
         candidates: candidate indices used
     """
+    behavior_list = list(BEHAVIORS) if behaviors is None else list(behaviors)
+    if not behavior_list:
+        raise ValueError("At least one behavior is required")
+    unknown = [behavior for behavior in behavior_list if behavior not in BEHAVIORS]
+    if unknown:
+        raise ValueError(f"Unknown behaviors: {unknown}")
+
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
 
@@ -668,7 +1006,12 @@ def cnn_ihvp_influences(
 
     n_queries = query_x.shape[0]
     n_candidates = candidates.numel()
-    influences = torch.zeros((n_queries, n_candidates, 4), dtype=dtype, device=device)
+    influences = torch.zeros(
+        (n_queries, n_candidates, len(behavior_list)),
+        dtype=dtype,
+        device=device,
+    )
+    l2 = float(getattr(model, "l2", 0.0))
 
     # Precompute candidate gradients (reuse across queries)
     candidate_grads = []
@@ -689,12 +1032,16 @@ def cnn_ihvp_influences(
 
     # Helper: Hessian-vector product
     def hvp(v: torch.Tensor) -> torch.Tensor:
-        """Compute (H + damping*I)*v where H is Hessian of training loss."""
+        """Compute (H + damping*I)*v for the regularized training objective."""
         model.zero_grad()
         model.train()
 
         logits = model(train_x)
         loss = F.cross_entropy(logits, train_y)
+        if l2 != 0.0:
+            for name, parameter in model.named_parameters():
+                if "weight" in name:
+                    loss = loss + 0.5 * l2 * torch.sum(parameter * parameter)
 
         grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
         flat_grads = torch.cat([g.flatten() for g in grads])
@@ -730,7 +1077,7 @@ def cnn_ihvp_influences(
 
     # For each query and behavior, compute IF influence
     for q_idx in range(n_queries):
-        for behavior_idx, behavior in enumerate(BEHAVIORS):
+        for behavior_idx, behavior in enumerate(behavior_list):
             model.zero_grad()
             model.train()
 
@@ -760,7 +1107,7 @@ def cnn_ihvp_influences(
 
             # Compute IF influence for all candidates
             for cand_idx, cand_grad in enumerate(candidate_grads):
-                influences[q_idx, cand_idx, behavior_idx] = torch.dot(ihvp, cand_grad).item()
+                influences[q_idx, cand_idx, behavior_idx] = -torch.dot(ihvp, cand_grad).item()
 
     model.eval()
     return influences, candidates

@@ -1,54 +1,86 @@
-"""Generate the CIFAR-10 figure from aggregated JSON results."""
+"""Generate the supplementary CIFAR-10 figure from aggregated results."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
 
 
 CODE_DIR = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = CODE_DIR / "outputs" / "cifar10"
 FIG_DIR = CODE_DIR / "plot" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR = CODE_DIR / "outputs" / "cifar10"
-AGG_PATH = OUTPUT_DIR / "aggregated_results.json"
+AGGREGATED_PATH = OUTPUT_DIR / "aggregated_results.json"
+SCHEMA_VERSION = 5
 
-COLORS = {
+ETAS = (0.01, 0.05, 0.1, 0.3, 0.5)
+ALPHAS = (1e-5, 1e-3, 0.1)
+X_PADDING_FRACTION = 0.08
+
+FINDING1_COLORS = {
+    "behavior_soft_margin": "#009E73",
+    "behavior_hard_margin": "#E69F00",
+    "behavior_query_logit": "#D55E00",
+    "perturbation_1e-3": "#0173B2",
+    "perturbation_1e-1": "#CA9161",
+    "transition_multi_step": "#56B4E9",
+    "transition_inverse_hessian": "#7570B3",
+}
+
+FINDING2_BEHAVIORS = ("negative_loss", "hard_margin", "target_logit")
+FINDING2_BEHAVIOR_LABELS = {
+    "negative_loss": "query loss",
+    "hard_margin": "hard margin",
+    "target_logit": "query logit",
+}
+FINDING2_COLORS = {
     "negative_loss": "#0072B2",
-    "soft_margin": "#009E73",
     "hard_margin": "#E69F00",
     "target_logit": "#D55E00",
-}
-BEHAVIOR_LABELS = {
-    "negative_loss": "negative loss",
-    "soft_margin": "soft margin",
-    "hard_margin": "hard margin",
-    "target_logit": "target logit",
+    "inverse_hessian": "#7570B3",
 }
 
 plt.rcParams.update({
-    "font.size": 9,
-    "axes.titlesize": 9.5,
-    "axes.labelsize": 9,
-    "legend.fontsize": 7.5,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "font.size": 10.5,
+    "axes.titlesize": 11,
+    "axes.labelsize": 11,
+    "legend.fontsize": 10,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
     "axes.spines.top": False,
     "axes.spines.right": False,
     "figure.dpi": 150,
 })
 
 
+@dataclass(frozen=True)
+class Comparison:
+    key: str
+    label: str
+    axis: str
+    color: str
+    taus: np.ndarray
+
+
 def _load_aggregated() -> dict:
-    if not AGG_PATH.exists():
+    if not AGGREGATED_PATH.is_file():
         raise FileNotFoundError(
-            f"Missing aggregated CIFAR-10 results: {AGG_PATH}. "
+            f"Missing aggregated CIFAR-10 results: {AGGREGATED_PATH}. "
             "Run `python experiments/aggregate_cifar10_results.py` first."
         )
-    with AGG_PATH.open(encoding="utf-8") as stream:
-        return json.load(stream)
+    with AGGREGATED_PATH.open(encoding="utf-8") as stream:
+        aggregated = json.load(stream)
+    if aggregated.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"Expected CIFAR-10 aggregate schema {SCHEMA_VERSION}, got "
+            f"{aggregated.get('schema_version')!r}"
+        )
+    return aggregated
 
 
 def _as_float_array(values: list[float | None]) -> np.ndarray:
@@ -58,171 +90,287 @@ def _as_float_array(values: list[float | None]) -> np.ndarray:
     )
 
 
-def load_exp5a_data() -> dict[str, np.ndarray]:
+def _load_figure_data() -> tuple[list[Comparison], dict[str, np.ndarray]]:
     aggregated = _load_aggregated()
-    raw = aggregated["exp5a_behavior"]["per_query_kendall_tau"]
-    return {behavior: _as_float_array(values) for behavior, values in raw.items()}
+    try:
+        figure = aggregated["figure"]
+        comparisons_raw = figure["finding1"]["comparisons"]
+        one_step_raw = figure["finding2"]["one_step"]
+        reoptimization_raw = figure["finding2"]["reoptimization"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("CIFAR-10 aggregate does not contain figure data") from error
 
+    expected_keys = list(FINDING1_COLORS)
+    actual_keys = [item["key"] for item in comparisons_raw]
+    if actual_keys != expected_keys:
+        raise ValueError(
+            "Finding 1 comparisons do not match the CIFAR-10 figure: "
+            f"expected {expected_keys}, got {actual_keys}"
+        )
 
-def load_exp5b_data() -> dict:
-    return _load_aggregated()["exp5b_stepsize"]
-
-
-def load_exp5c_data() -> dict[str, np.ndarray]:
-    aggregated = _load_aggregated()
-    raw = aggregated["exp5c_ihvp"]["per_query_kendall_tau"]
-    return {behavior: _as_float_array(values) for behavior, values in raw.items()}
-
-
-def _draw_no_data(ax, title: str) -> None:
-    ax.text(0.5, 0.5, "No data available", ha="center", va="center",
-            transform=ax.transAxes)
-    ax.set_title(title)
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-
-def draw_violins(ax):
-    """(a) Behavior mismatch: per-query tau distributions."""
-    data = load_exp5a_data()
-    entries = [
-        ("soft margin", data.get("soft_margin"), COLORS["soft_margin"]),
-        ("hard margin", data.get("hard_margin"), COLORS["hard_margin"]),
-        ("target logit", data.get("target_logit"), COLORS["target_logit"]),
+    comparisons = [
+        Comparison(
+            key=item["key"],
+            label=item["label"],
+            axis=f"${item['axis']}$",
+            color=FINDING1_COLORS[item["key"]],
+            taus=_as_float_array(
+                [value for seed in item["tau_by_seed"] for value in seed]
+            ),
+        )
+        for item in comparisons_raw
     ]
-    available = [
-        (label, values[np.isfinite(values)], color)
-        for label, values, color in entries
-        if values is not None and np.any(np.isfinite(values))
-    ]
-    if not available:
-        _draw_no_data(ax, "(a) Behavior mismatch (CIFAR-10) - No Data")
-        return
 
-    positions = range(1, len(available) + 1)
-    parts = ax.violinplot(
-        [values for _, values, _ in available],
-        positions=positions,
-        showmedians=True,
-        widths=0.8,
+    values: dict[str, np.ndarray] = {}
+    for item in one_step_raw:
+        eta = float(item["eta"])
+        behavior = str(item["behavior"])
+        values[f"eta__{eta:g}__{behavior}"] = _as_float_array(item["tau_by_seed"])
+
+    for item in reoptimization_raw:
+        alpha = float(item["alpha"])
+        seed_means = np.asarray(
+            [
+                np.nanmean(_as_float_array(seed_values))
+                for seed_values in item["tau_by_seed"]
+            ],
+            dtype=np.float64,
+        )
+        values[f"alpha__{alpha:.10g}"] = seed_means
+
+    expected_finding2_keys = {
+        *(f"eta__{eta:g}__{behavior}" for eta in ETAS for behavior in FINDING2_BEHAVIORS),
+        *(f"alpha__{alpha:.10g}" for alpha in ALPHAS),
+    }
+    if set(values) != expected_finding2_keys:
+        missing = sorted(expected_finding2_keys - set(values))
+        unexpected = sorted(set(values) - expected_finding2_keys)
+        raise ValueError(
+            "Finding 2 data do not match the CIFAR-10 figure; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    if any(item.taus.size == 0 or not np.isfinite(item.taus).all() for item in comparisons):
+        raise ValueError("Finding 1 data contain empty or non-finite tau values")
+    if any(values.size == 0 or not np.isfinite(values).all() for values in values.values()):
+        raise ValueError("Finding 2 data contain empty or non-finite tau values")
+
+    return comparisons, values
+
+
+def _mean_and_ci(values: np.ndarray) -> tuple[float, float]:
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        raise ValueError("No finite seed-level tau values")
+    mean = float(values.mean())
+    if values.size == 1:
+        return mean, 0.0
+    half_width = float(
+        stats.t.ppf(0.975, df=values.size - 1)
+        * values.std(ddof=1)
+        / np.sqrt(values.size)
     )
-    for body, (_, _, color) in zip(parts["bodies"], available):
-        body.set_facecolor(color)
-        body.set_alpha(0.65)
+    return mean, half_width
+
+
+def _symmetric_log_limits(values: tuple[float, ...]) -> tuple[float, float]:
+    log_min = np.log(min(values))
+    log_max = np.log(max(values))
+    span = log_max - log_min
+    return (
+        float(np.exp(log_min - X_PADDING_FRACTION * span)),
+        float(np.exp(log_max + X_PADDING_FRACTION * span)),
+    )
+
+
+def _draw_finding1(ax: plt.Axes, comparisons: list[Comparison]) -> None:
+    positions = np.asarray([1, 2, 3, 4.6, 5.6, 7.2, 8.2], dtype=float)
+    parts = ax.violinplot(
+        [item.taus for item in comparisons],
+        positions=positions,
+        widths=0.8,
+        showmedians=True,
+    )
+    for body, item in zip(parts["bodies"], comparisons):
+        body.set_facecolor(item.color)
+        body.set_alpha(0.8)
         body.set_edgecolor("none")
     for key in ("cmedians", "cmins", "cmaxes", "cbars"):
         parts[key].set_color("#444444")
         parts[key].set_linewidth(0.7)
 
-    ax.set_xticks(list(positions))
-    ax.set_xticklabels(
-        [label for label, _, _ in available],
-        rotation=20,
-        ha="center",
-        va="center",
-        rotation_mode="anchor",
-    )
-    ax.tick_params(axis="x", pad=12)
+    ax.axvline(3.8, color="grey", lw=0.6, ls=":")
+    ax.axvline(6.4, color="grey", lw=0.6, ls=":")
+    ax.set_xticks([2, 5.1, 7.7])
+    ax.set_xticklabels([r"behavior $B$", r"perturbation $P$", r"transition $T$"])
+    ax.tick_params(axis="x", length=0)
     ax.axhline(0, color="grey", lw=0.5, ls=":")
-    ax.set_ylabel(r"per-query Kendall $\tau$ vs negative loss")
-    ax.set_ylim(-0.1, 1.08)
-    ax.set_box_aspect(1)
+    ax.set_ylabel(r"Kendall's $\tau$")
+    ax.set_ylim(-0.5, 1.0)
+
+    patch = plt.matplotlib.patches.Patch
+    behavior_handles = [
+        patch(color=item.color, alpha=0.75, label=f"{item.axis}: {item.label}")
+        for item in comparisons[:3]
+    ]
+    other_handles = [
+        patch(color=item.color, alpha=0.75, label=f"{item.axis}: {item.label}")
+        for item in comparisons[3:]
+    ]
+    behavior_legend = ax.legend(
+        handles=behavior_handles,
+        frameon=False,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=3,
+        handlelength=0.9,
+        handleheight=0.9,
+        labelspacing=0.2,
+        columnspacing=0.8,
+    )
+    ax.add_artist(behavior_legend)
+    ax.legend(
+        handles=other_handles,
+        frameon=False,
+        loc="lower left",
+        ncol=2,
+        handlelength=0.9,
+        handleheight=0.9,
+        labelspacing=0.2,
+        columnspacing=0.8,
+    )
 
 
-def draw_sweep(ax):
-    """(b) Step-size sweep: tau vs eta."""
-    data = load_exp5b_data()
-    etas = data.get("etas", [])
-    results = data.get("results", {})
-    if not etas or not results:
-        _draw_no_data(ax, "(b) Step-size sweep - No Data")
-        return
-
-    xs = [float(eta) for eta in etas]
-    for behavior in ("negative_loss", "target_logit"):
-        entries = [results[eta].get(behavior, {}) for eta in etas]
-        means = np.asarray(
-            [entry.get("mean") for entry in entries], dtype=np.float64
+def _draw_one_step(ax: plt.Axes, values: dict[str, np.ndarray]) -> None:
+    for behavior in FINDING2_BEHAVIORS:
+        points = [
+            _mean_and_ci(values[f"eta__{eta:g}__{behavior}"])
+            for eta in ETAS
+        ]
+        means = [point[0] for point in points]
+        half_widths = [point[1] for point in points]
+        ax.plot(
+            ETAS,
+            means,
+            marker="o",
+            ms=3,
+            lw=1.4,
+            color=FINDING2_COLORS[behavior],
+            label=FINDING2_BEHAVIOR_LABELS[behavior],
         )
-        stds = np.asarray(
-            [entry.get("std") for entry in entries], dtype=np.float64
+        ax.fill_between(
+            ETAS,
+            np.asarray(means) - np.asarray(half_widths),
+            np.asarray(means) + np.asarray(half_widths),
+            color=FINDING2_COLORS[behavior],
+            alpha=0.15,
+            lw=0,
         )
-        ax.plot(xs, means, marker="o", ms=3, lw=1.4,
-                color=COLORS[behavior], label=BEHAVIOR_LABELS[behavior])
-        ax.fill_between(xs, means - stds, means + stds,
-                        color=COLORS[behavior], alpha=0.15, lw=0)
 
     ax.set_xscale("log")
+    ax.set_xlim(*_symmetric_log_limits(ETAS))
+    ax.set_xticks(ETAS)
+    ax.set_xticklabels([f"{eta:g}" for eta in ETAS])
     ax.set_xlabel(r"step size $\eta$")
-    ax.set_ylabel(r"Kendall $\tau$")
-    ax.set_ylim(0.3, 1.02)
-    ax.legend(frameon=False, loc="lower left", handlelength=1.6,
-              borderaxespad=0.1, labelspacing=0.3)
-    ax.set_box_aspect(1)
+    ax.axhline(1.0, color="grey", lw=0.5, ls=":")
 
 
-def draw_ihvp_failure(ax):
-    """(c) IF-IHVP failure: per-query tau distributions."""
-    data = load_exp5c_data()
-    entries = [
-        ("negative loss", data.get("negative_loss"), COLORS["negative_loss"]),
-        ("target logit", data.get("target_logit"), COLORS["target_logit"]),
-        ("soft margin", data.get("soft_margin"), COLORS["soft_margin"]),
-        ("hard margin", data.get("hard_margin"), COLORS["hard_margin"]),
-    ]
-    available = [
-        (label, values[np.isfinite(values)], color)
-        for label, values, color in entries
-        if values is not None and np.any(np.isfinite(values))
-    ]
-    if not available:
-        _draw_no_data(ax, "(c) IF-IHVP vs exact (CIFAR-10) - No Data")
-        return
-
-    positions = range(1, len(available) + 1)
-    parts = ax.violinplot(
-        [values for _, values, _ in available],
-        positions=positions,
-        showmedians=True,
-        widths=0.7,
+def _draw_reoptimization(ax: plt.Axes, values: dict[str, np.ndarray]) -> None:
+    points = [_mean_and_ci(values[f"alpha__{alpha:.10g}"]) for alpha in ALPHAS]
+    means = [point[0] for point in points]
+    half_widths = [point[1] for point in points]
+    alpha_labels = [r"$10^{-5}$", r"$10^{-3}$", "0.1"]
+    ax.plot(
+        ALPHAS,
+        means,
+        marker="o",
+        ms=3.5,
+        lw=1.5,
+        color=FINDING2_COLORS["inverse_hessian"],
+        label="inverse-Hessian response",
     )
-    for body, (_, _, color) in zip(parts["bodies"], available):
-        body.set_facecolor(color)
-        body.set_alpha(0.65)
-        body.set_edgecolor("none")
-    for key in ("cmedians", "cmins", "cmaxes", "cbars"):
-        parts[key].set_color("#444444")
-        parts[key].set_linewidth(0.7)
-
-    ax.set_xticks(list(positions))
-    ax.set_xticklabels(
-        [label for label, _, _ in available],
-        rotation=20,
-        ha="center",
-        va="center",
-        rotation_mode="anchor",
+    ax.fill_between(
+        ALPHAS,
+        np.asarray(means) - np.asarray(half_widths),
+        np.asarray(means) + np.asarray(half_widths),
+        color=FINDING2_COLORS["inverse_hessian"],
+        alpha=0.18,
+        lw=0,
     )
-    ax.tick_params(axis="x", pad=12)
-    ax.axhline(0, color="grey", lw=0.5, ls=":")
-    ax.set_ylabel(r"per-query Kendall $\tau$")
-    ax.set_ylim(-0.5, 0.25)
-    ax.set_box_aspect(1)
+    ax.set_xscale("log")
+    ax.set_xlim(*_symmetric_log_limits(ALPHAS))
+    ax.set_xticks(ALPHAS)
+    ax.set_xticklabels(alpha_labels)
+    ax.minorticks_off()
+    ax.set_xlabel(r"$\alpha$", loc="right")
+    ax.axhline(1.0, color="grey", lw=0.5, ls=":")
 
 
 def main() -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(9.4, 2.9), gridspec_kw={"wspace": 0.45})
-    draw_violins(axes[0])
-    axes[0].set_title("(a) Behavior mismatch")
-    draw_sweep(axes[1])
-    axes[1].set_title("(b) Approximation error under fixed $S$")
-    draw_ihvp_failure(axes[2])
-    axes[2].set_title("(c) IF-IHVP transition mismatch")
+    comparisons, values = _load_figure_data()
+    fig, (ax_finding1, ax_finding2) = plt.subplots(
+        1,
+        2,
+        figsize=(9.8, 3.9),
+        gridspec_kw={"width_ratios": (1.1, 1.0)},
+        constrained_layout=True,
+    )
+    ax_reoptimization = ax_finding2.twiny()
 
-    for ext in ("pdf", "png"):
-        fig.savefig(FIG_DIR / f"fig_cifar10_exp5.{ext}", bbox_inches="tight")
+    _draw_finding1(ax_finding1, comparisons)
+    _draw_one_step(ax_finding2, values)
+    _draw_reoptimization(ax_reoptimization, values)
+
+    ax_finding1.set_title(
+        "(a) Specification mismatch",
+        loc="center",
+        fontweight="bold",
+        y=1.16,
+    )
+    ax_finding2.set_title("(b) Approximation error", loc="center", fontweight="bold")
+
+    ax_reoptimization.spines["top"].set_visible(True)
+    ax_reoptimization.spines["right"].set_visible(False)
+    ax_reoptimization.spines["bottom"].set_visible(False)
+    ax_reoptimization.spines["left"].set_visible(False)
+    ax_reoptimization.tick_params(
+        axis="x",
+        which="both",
+        top=True,
+        bottom=False,
+        labeltop=True,
+        labelbottom=False,
+    )
+    ax_reoptimization.tick_params(axis="y", which="both", left=False, labelleft=False)
+
+    ax_finding1.set_ylabel(r"Kendall's $\tau$")
+    ax_finding2.set_ylabel(r"Kendall's $\tau$")
+    ax_finding2.set_xlim(*_symmetric_log_limits(ETAS))
+    ax_finding2.set_ylim(-0.2, 1.02)
+
+    one_step_handles, one_step_labels = ax_finding2.get_legend_handles_labels()
+    reoptimization_handles, reoptimization_labels = (
+        ax_reoptimization.get_legend_handles_labels()
+    )
+    ax_finding2.legend(
+        handles=one_step_handles + reoptimization_handles,
+        labels=one_step_labels + reoptimization_labels,
+        frameon=False,
+        loc="lower center",
+        ncol=2,
+        handlelength=1.5,
+        labelspacing=0.25,
+        columnspacing=1.0,
+    )
+
+    fig.canvas.draw()
+    ax_finding1.title.set_position((0.5, ax_finding2.title.get_position()[1]))
+
+    for extension in ("pdf", "png"):
+        fig.savefig(FIG_DIR / f"fig_cifar10.{extension}", bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved figure to {FIG_DIR / 'fig_cifar10.pdf'}")
-    print(f"Saved figure to {FIG_DIR / 'fig_cifar10.png'}")
+    print(f"Saved {FIG_DIR / 'fig_cifar10.pdf'}")
+    print(f"Saved {FIG_DIR / 'fig_cifar10.png'}")
 
 
 if __name__ == "__main__":

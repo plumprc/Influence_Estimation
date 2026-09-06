@@ -22,10 +22,29 @@ from influence.metrics import compare_scores
 from influence.models import SimpleCNN
 
 
+def _torch_dtype(name: str) -> torch.dtype:
+    return {"float32": torch.float32, "float64": torch.float64}[name]
+
+
+def _save_npz_atomic(path: Path, **arrays) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    with temporary_path.open("wb") as stream:
+        np.savez_compressed(stream, **arrays)
+    temporary_path.replace(path)
+
+
+def _save_json_atomic(path: Path, value: dict) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
+    temporary_path.replace(path)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Exp 5a: CIFAR-10 behavior mismatch")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--dtype", choices=("float32", "float64"), default="float64")
     parser.add_argument("--data-root", type=str, default="datasets/CIFAR10")
     parser.add_argument(
         "--output-dir",
@@ -49,6 +68,7 @@ def main():
     parser.add_argument("--step-size", type=float, default=0.1)
 
     args = parser.parse_args()
+    dtype = _torch_dtype(args.dtype)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -68,7 +88,7 @@ def main():
         seed=args.seed,
         normalization="unit",
         device=args.device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
 
     print(f"Train: {data.train_x.shape[0]}, Test: {data.test_x.shape[0]}\n")
@@ -79,7 +99,7 @@ def main():
         n_classes=10,
         l2=args.l2,
         device=args.device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
 
     result = model.fit(
@@ -106,7 +126,7 @@ def main():
     query_y = data.test_y[query_indices]
 
     print(f"Computing one-step influences ({args.num_queries} queries × {args.num_candidates} candidates)...")
-    exact, first_order, candidates = cnn_one_step_influences(
+    exact, _, candidates = cnn_one_step_influences(
         model,
         data.train_x,
         data.train_y,
@@ -117,14 +137,13 @@ def main():
     )
 
     print(f"✓ Exact effects: {exact.shape}")
-    print(f"✓ First-order approximations: {first_order.shape}\n")
+    print()
 
     # Save raw scores
     scores_path = output_dir / "scores.npz"
-    np.savez(
+    _save_npz_atomic(
         scores_path,
         exact=exact.cpu().numpy(),
-        first_order=first_order.cpu().numpy(),
         candidates=candidates.cpu().numpy(),
         query_indices=query_indices.cpu().numpy(),
     )
@@ -165,32 +184,6 @@ def main():
         print(f"  {b1} vs {b2}: τ={np.mean(taus):.3f}, "
               f"top-5%={np.mean(overlaps):.3f}")
 
-    # Compute approximation quality for each behavior
-    print("\nComputing approximation quality (exact vs first-order)...")
-    approximation_quality = {}
-    for behavior_idx, behavior in enumerate(BEHAVIORS):
-        exact_scores = exact[:, :, behavior_idx].cpu().numpy()
-        approx_scores = first_order[:, :, behavior_idx].cpu().numpy()
-
-        # Compare per query and aggregate
-        nrmses, taus, signs, overlaps = [], [], [], []
-        for q_idx in range(exact_scores.shape[0]):
-            comp = compare_scores(exact_scores[q_idx], approx_scores[q_idx])
-            nrmses.append(comp["nrmse"])
-            taus.append(comp["kendall_tau"])
-            signs.append(comp["sign_accuracy"])
-            overlaps.append(comp["top_5pct_overlap"])
-
-        approximation_quality[behavior] = {
-            "nrmse": float(np.mean(nrmses)),
-            "kendall_tau": float(np.mean(taus)),
-            "sign_accuracy": float(np.mean(signs)),
-            "top_5pct_overlap": float(np.mean(overlaps)),
-        }
-
-        print(f"  {behavior}: NRMSE={np.mean(nrmses):.3f}, "
-              f"τ={np.mean(taus):.3f}")
-
     # Save summary
     summary = {
         "config": {key: str(value) for key, value in vars(args).items()},
@@ -207,14 +200,13 @@ def main():
             "perturbation": "one-example SGD update on unregularized training loss",
             "transition": f"one-step with eta={args.step_size}",
             "behaviors": list(BEHAVIORS),
+            "precision": args.dtype,
         },
         "behavior_disagreement": behavior_disagreement,
-        "approximation_quality": approximation_quality,
     }
 
     summary_path = output_dir / "summary.json"
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
+    _save_json_atomic(summary_path, summary)
 
     print(f"\n✓ Results saved to {output_dir}")
     print(f"  - {scores_path.name}")

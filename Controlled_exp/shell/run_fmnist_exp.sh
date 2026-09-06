@@ -1,133 +1,137 @@
 #!/bin/bash
-# FashionMNIST experimental suite (Exp 1+2+3+4)
-# Output: outputs/fashion_mnist/{exp1_behavior,exp2_transition,exp3_stepsize,exp4_matched_matrix}
-# Usage: run from anywhere -- the script locates the project by its own path.
-# EXPS="1 4" bash shell/run_fmnist_exp.sh              # run a subset of experiments
-# SEEDS="0 1 2" bash shell/run_fmnist_exp.sh           # resume specific seeds (Exp 1-3)
-# DEVICE=cpu bash shell/run_fmnist_exp.sh              # override the device
+# FashionMNIST controlled experiments used by the paper.
+#
+# Pipeline: exp1 -> exp2 -> exp3 -> exp4 -> aggregate -> figures
+#
+# Usage:
+#   bash shell/run_fmnist_exp.sh
+#   EXPS="1 3 4" bash shell/run_fmnist_exp.sh
+#   SEEDS="0 1 2" bash shell/run_fmnist_exp.sh
+#   FORCE=1 bash shell/run_fmnist_exp.sh  # rerun complete outputs
 
 set -u
 
 CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_BASE="$CODE_DIR/outputs/fashion_mnist"
 
-NUM_SEEDS=3
-DEVICE=${DEVICE:-"cuda"}
 EXPS=${EXPS-"1 2 3 4"}
-SEEDS=${SEEDS:-$(seq -s ' ' 0 $((NUM_SEEDS-1)))}
-ETAS=${ETAS:-"0.01 0.02 0.05 0.1 0.15 0.2 0.3 0.5 0.7 1.0"}
-MAX_TRAIN=20000
-MAX_TEST=2000
+SEEDS=${SEEDS-"0 1 2"}
+ETAS=${ETAS-"0.01 0.02 0.05 0.1 0.15 0.2 0.3 0.5 0.7 1.0"}
+ALPHAS=${ALPHAS-"1e-5 1e-4 1e-3 1e-2 0.1"}
+DEVICE=${DEVICE-"cuda"}
+FORCE=${FORCE-"0"}
 
-mkdir -p "$CODE_DIR/logs"
 cd "$CODE_DIR"
 
 failed=""
+
+output_complete() {
+  local directory="$1"
+  [ -s "$directory/scores.npz" ] && [ -s "$directory/summary.json" ]
+}
 
 run_tracked() {
   local label="$1"
   shift
   echo "Running $label..."
   if "$@"; then
-    echo "$label completed at $(date)"
+    echo "$label completed"
   else
-    echo "$label FAILED at $(date) -- continuing"
+    echo "$label FAILED"
     failed="$failed $label"
   fi
 }
 
 exp1() {
-  echo ""
-  echo "========================================"
-  echo "Experiment 1: Behavior Mismatch"
-  echo "Config: queries=1000, candidates=1000, seeds=[$SEEDS]"
-  echo "========================================"
   for seed in $SEEDS; do
-    run_tracked "Running seed $seed..." python experiments/run_controlled.py \
-      --max-train $MAX_TRAIN \
-      --max-test $MAX_TEST \
-      --num-queries 1000 \
-      --num-candidates 1000 \
-      --step-size 0.1 \
-      --seed $seed \
-      --output-dir "$OUTPUT_BASE/exp1_behavior/seed_$seed" \
-      --device $DEVICE
+    output_dir="$OUTPUT_BASE/exp1_behavior/seed_$seed"
+    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
+      echo "Skipping exp1 behavior seed=$seed (complete output)"
+    else
+      run_tracked "exp1 behavior seed=$seed" \
+        python experiments/run_controlled.py \
+          --max-train 20000 \
+          --max-test 2000 \
+          --num-queries 1000 \
+          --num-candidates 1000 \
+          --step-size 0.1 \
+          --seed "$seed" \
+          --device "$DEVICE" \
+          --output-dir "$output_dir"
+    fi
   done
 }
 
 exp2() {
-  echo ""
-  echo "========================================"
-  echo "Experiment 2: Transition Mismatch"
-  echo "Config: queries=1000, candidates=1000, seeds=[$SEEDS]"
-  echo "========================================"
   for seed in $SEEDS; do
-    run_tracked "Running seed $seed..." python experiments/run_transitions.py \
-      --max-train $MAX_TRAIN \
-      --max-test $MAX_TEST \
-      --num-queries 1000 \
-      --num-candidates 1000 \
-      --step-size 0.1 \
-      --num-steps 5 \
-      --damping 0.01 \
-      --behavior negative_loss \
-      --seed $seed \
-      --output-dir "$OUTPUT_BASE/exp2_transition/seed_$seed" \
-      --device $DEVICE
+    output_dir="$OUTPUT_BASE/exp2_transition/seed_$seed"
+    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
+      echo "Skipping exp2 transition seed=$seed (complete output)"
+    else
+      run_tracked "exp2 transition seed=$seed" \
+        python experiments/run_transitions.py \
+          --max-train 20000 \
+          --max-test 2000 \
+          --num-queries 1000 \
+          --num-candidates 1000 \
+          --step-size 0.1 \
+          --num-steps 5 \
+          --damping 0.01 \
+          --behavior negative_loss \
+          --seed "$seed" \
+          --device "$DEVICE" \
+          --output-dir "$output_dir"
+    fi
   done
 }
 
 exp3() {
-  echo ""
-  echo "========================================"
-  echo "Experiment 3: Step-Size Sweep"
-  echo "Config: queries=1000, candidates=1000, eta=[$ETAS], seeds=[$SEEDS]"
-  echo "========================================"
   for eta in $ETAS; do
     for seed in $SEEDS; do
-      run_tracked "Running eta=$eta... seed $seed..." python experiments/run_controlled.py \
-        --max-train $MAX_TRAIN \
-        --max-test $MAX_TEST \
-        --num-queries 1000 \
-        --num-candidates 1000 \
-        --step-size $eta \
-        --seed $seed \
-        --output-dir "$OUTPUT_BASE/exp3_stepsize/eta_${eta}/seed_$seed" \
-        --device $DEVICE
+      output_dir="$OUTPUT_BASE/exp3_stepsize/eta_${eta}/seed_${seed}"
+      if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
+        echo "Skipping exp3 eta=$eta seed=$seed (complete output)"
+      else
+        run_tracked "exp3 eta=$eta seed=$seed" \
+          python experiments/run_controlled.py \
+            --max-train 20000 \
+            --max-test 2000 \
+            --num-queries 1000 \
+            --num-candidates 1000 \
+            --step-size "$eta" \
+            --seed "$seed" \
+            --device "$DEVICE" \
+            --output-dir "$output_dir"
+      fi
     done
   done
 }
 
 exp4() {
-  echo ""
-  echo "========================================"
-  echo "Experiment 4: Matched Evaluation Matrix"
-  echo "Config: train=5000, queries=500, candidates=500"
-  echo "========================================"
   for seed in $SEEDS; do
-    run_tracked "Running seed $seed..." python experiments/run_matched_matrix.py \
-      --max-train 5000 \
-      --max-test 500 \
-      --num-queries 500 \
-      --num-candidates 500 \
-      --step-size 0.05 \
-      --num-steps 5 \
-      --epsilon 0.001 \
-      --seed $seed \
-      --output-dir "$OUTPUT_BASE/exp4_matched_matrix/seed_$seed" \
-      --device $DEVICE
+    output_dir="$OUTPUT_BASE/exp4_perturbation_scale/seed_$seed"
+    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
+      echo "Skipping exp4 perturbation seed=$seed (complete output)"
+    else
+      run_tracked "exp4 perturbation seed=$seed" \
+        python experiments/run_perturbation_scale.py \
+          --max-train 5000 \
+          --max-test 500 \
+          --num-queries 500 \
+          --num-candidates 500 \
+          --alphas $ALPHAS \
+          --behavior negative_loss \
+          --solver updated-hessian \
+          --newton-tol 1e-12 \
+          --seed "$seed" \
+          --device "$DEVICE" \
+          --output-dir "$output_dir"
+    fi
   done
 }
 
-echo "========================================"
-echo "FashionMNIST suite: experiments [$EXPS]"
-echo "Seeds: Exp1_2_3=[$SEEDS] (train=$MAX_TRAIN), Exp4=[$SEEDS] (train=5000)"
-echo "Output: $OUTPUT_BASE"
-echo "Started at: $(date)"
-echo "========================================"
-
 for exp in $EXPS; do
-  case $exp in
+  case "$exp" in
     1) exp1 ;;
     2) exp2 ;;
     3) exp3 ;;
@@ -137,29 +141,32 @@ for exp in $EXPS; do
 done
 
 if [ -z "$failed" ]; then
-  echo ""
   echo "Aggregating FashionMNIST results..."
   if python experiments/aggregate_results.py; then
-    echo "Aggregation completed at $(date)"
+    echo "Aggregation completed"
   else
-    echo "Aggregation FAILED at $(date)"
+    echo "Aggregation FAILED"
     failed="$failed aggregation"
   fi
 else
-  echo ""
   echo "Skipping aggregation because one or more experiment runs failed."
-  echo "After fixing the failed runs, run: python experiments/aggregate_results.py"
 fi
 
-echo ""
-echo "========================================"
-if [ -n "$failed" ]; then
-  echo "FashionMNIST suite finished at $(date) with FAILED runs:$failed"
+if [ -z "$failed" ]; then
+  echo "Generating figures..."
+  if python plot/plot_fmnist.py; then
+    echo "Figures completed"
+  else
+    echo "Figure generation FAILED"
+    failed="$failed figures"
+  fi
 else
-  echo "FashionMNIST suite (experiments [$EXPS]) completed!"
-  echo "Finished at: $(date)"
+  echo "Skipping figures because aggregation or experiments failed."
 fi
-echo "========================================"
-echo ""
-echo "Results saved in: $OUTPUT_BASE"
-echo "Figure: python plot/plot_fmnist.py"
+
+if [ -n "$failed" ]; then
+  echo "FashionMNIST pipeline finished with failures:$failed"
+  exit 1
+fi
+
+echo "FashionMNIST pipeline completed."
