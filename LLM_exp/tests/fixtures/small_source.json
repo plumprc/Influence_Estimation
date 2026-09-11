@@ -1,0 +1,100 @@
+{
+  "records": [
+    {
+      "id": "fixture-train-000000",
+      "prompt": "Question 0?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "A",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 0. It supports choice A.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000001",
+      "prompt": "Question 1?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "B",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 1. It supports choice B.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000002",
+      "prompt": "Question 2?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "C",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 2. It supports choice C.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000003",
+      "prompt": "Question 3?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "D",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 3. It supports choice D.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000004",
+      "prompt": "Question 4?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "A",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 4. It supports choice A.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000005",
+      "prompt": "Question 5?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "B",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 5. It supports choice B.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000006",
+      "prompt": "Question 6?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "C",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 6. It supports choice C.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000007",
+      "prompt": "Question 7?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "D",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 7. It supports choice D.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000008",
+      "prompt": "Question 8?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "A",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 8. It supports choice A.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000009",
+      "prompt": "Question 9?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "B",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 9. It supports choice B.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000010",
+      "prompt": "Question 10?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "C",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 10. It supports choice C.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    },
+    {
+      "id": "fixture-train-000011",
+      "prompt": "Question 11?\nA: First\nB: Second\nC: Third\nD: Fourth",
+      "answer": "D",
+      "choices": ["A", "B", "C", "D"],
+      "explanation": "Reason 11. It supports choice D.",
+      "metadata": {"subject": "natural science", "topic": "physics"}
+    }
+  ]
+}
