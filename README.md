@@ -16,10 +16,10 @@ Each directory is self-contained and has its own README with reproduction instru
 
 ## 🛠️ Setup
 
-The experiments use PyTorch with NumPy, SciPy, scikit-learn, and Matplotlib. The LLM experiments additionally use Transformers, PEFT, and the Hugging Face `datasets` and `huggingface_hub` libraries.
+Dependencies are pinned to the versions used for the experiments. Install them with:
 
 ```bash
-python -m pip install torch torchvision transformers peft datasets scipy scikit-learn matplotlib numpy huggingface_hub
+python -m pip install -r requirements.txt
 ```
 
 The controlled and noisy-label experiments expect the standard `torchvision` dataset layout and can download FashionMNIST and CIFAR-10 automatically. The LLM experiments use [ScienceQA](https://huggingface.co/datasets/derek-thomas/ScienceQA) and instruction-tuned checkpoints from Hugging Face, which can be cached in advance with `hf download`.

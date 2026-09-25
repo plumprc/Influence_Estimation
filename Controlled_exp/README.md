@@ -2,13 +2,13 @@
 
 This directory contains the controlled experiments for the paper. FashionMNIST is the main convex setting, and CIFAR-10 is the supplementary non-convex setting. The paper-facing term query loss is stored in code as `negative_loss`.
 
-## Reproduce
+## 🚀 Reproduce
 
 Install the dependencies and prepare both datasets:
 
 ```bash
 cd Controlled_exp
-python -m pip install torch numpy scipy matplotlib
+python -m pip install -r ../requirements.txt
 
 python - <<'PY'
 from torchvision.datasets import CIFAR10, FashionMNIST
@@ -38,7 +38,7 @@ EXPS="" bash shell/run_fmnist_exp.sh
 FORCE=1 bash shell/run_cifar10_exp.sh
 ```
 
-## FashionMNIST
+## 🧥 FashionMNIST
 
 The unified scale is 20000 training examples, 2000 test examples, 1000 queries, and 1000 candidates. All paper-facing runs use seeds `0 1 2` and float64.
 
@@ -61,7 +61,7 @@ FORCE=1 bash shell/run_fmnist_exp.sh
 
 Supported variables are `EXPS`, `SEEDS`, `ETAS`, `ALPHAS`, `DEVICE`, and `FORCE`.
 
-## CIFAR-10
+## 🖼️ CIFAR-10
 
 The unified scale is 10000 training examples, 600 test examples, 500 queries, and 500 candidates. All paper-facing runs use seeds `0 1 2` and float64.
 
@@ -84,7 +84,7 @@ EXPS="" bash shell/run_cifar10_exp.sh
 
 Supported variables are `EXPS`, `AGG_EXPS`, `SEEDS`, `ETAS`, `ALPHAS`, `DEVICE`, `DTYPE`, and `FORCE`. By default, aggregation follows the selected `EXPS` scope and merges with the existing aggregate when possible.
 
-## Outputs
+## 📦 Outputs
 
 Seed-level results are written as:
 
@@ -121,7 +121,7 @@ plot/figures/fig_app.{pdf,png}
 
 `fig_app.pdf` contains one row of four panels. The first two panels report FashionMNIST Top-5% overlap and sign agreement, and the last two report the same metrics for CIFAR-10. All panels share the same top-axis alpha ticks.
 
-## Code Layout
+## 🗂️ Code Layout
 
 | Path | Purpose |
 |---|---|

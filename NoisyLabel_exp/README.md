@@ -2,15 +2,15 @@
 
 This directory contains the paper-facing noisy-label experiments on CIFAR-10. The paper-facing terms trusted loss and target logit are stored in code as `negative_loss` and `target_logit`, respectively.
 
-## Setup
+## 🛠️ Setup
 
-The scripts use PyTorch, NumPy, SciPy, and Matplotlib. They expect the extracted CIFAR-10 batches under:
+The scripts use PyTorch, NumPy, SciPy, and Matplotlib, as listed in the root `requirements.txt`. They expect the extracted CIFAR-10 batches under:
 
 ```text
 datasets/CIFAR10/cifar-10-batches-py/
 ```
 
-## Pipeline
+## ⚙️ Pipeline
 
 Run the full pipeline from this directory:
 
@@ -42,7 +42,7 @@ FORCE=1 bash shell/run_noisy_label_exp.sh       # rerun complete outputs
 
 Supported overrides are `EXPS`, `RHOS`, `SEEDS`, `ARCH_MODELS`, `ARCH_SEEDS`, `REMOVAL_SEEDS`, `DATA_ROOT`, `DEVICE`, `FAMILIES`, `ALLOW_PARTIAL`, and `FORCE`. These experiments are long-running and should be launched manually.
 
-## Outputs
+## 📦 Outputs
 
 The portable aggregate is:
 
@@ -66,7 +66,7 @@ plot/figures/fig_noisy_label.{pdf,png}
 
 For project migration, copy the code and this aggregate. Raw outputs are needed only to resume or extend experiments.
 
-## Exploratory RepSim Extension
+## 🧪 Exploratory RepSim Extension
 
 `shell/run_repsim_extension.sh` is an isolated signal-augmented representation similarity experiment and is not part of the paper-facing result bundle. It trains the appendix ResNet-18 configuration, augments class-conditional representation kernels with training and behavior signals, and aggregates the selected seeds:
 

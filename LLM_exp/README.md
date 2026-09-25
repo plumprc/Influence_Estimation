@@ -2,7 +2,7 @@
 
 This directory contains the ScienceQA attribution experiments. The main results use Qwen3-8B. Gemma-2-9B-it and Llama-3.1-8B-Instruct are supplementary cross-model checks.
 
-## Reproduction
+## 🚀 Reproduction
 
 1. Cache the model and dataset before launching a GPU job.
 
@@ -46,7 +46,7 @@ MODEL_DIR=llama3_1_8b
 
 Launchers skip stages whose `summary.json` already exists. Set `SKIP_COMPLETED=0` to rerun a stage. Set `LOCAL_FILES_ONLY=0` only when the launcher should be allowed to download missing Hugging Face assets.
 
-## Protocol
+## 📜 Protocol
 
 The frozen source contains 7,763 text-only ScienceQA records with valid answers and explanations. Data splits use seed 0 and are shared by training seeds 0, 1, and 2.
 
@@ -75,7 +75,7 @@ No retraining is needed. The launcher scores existing Stage 2 adapters and aggre
 
 Removal starts from the Stage 2 influence scores, removes 500 training records, and retrains LoRA from the foundation model with the original seed and hyperparameters. It evaluates 16 behavior-aligned method conditions, three behavior-free conditions, and three oracle or control conditions. Retrained adapters are deleted immediately after evaluation. Formal aggregation requires all selected seeds and conditions.
 
-## Exploratory RepSim Extension
+## 🧪 Exploratory RepSim Extension
 
 `shell/run_llm_repsim_extension.sh` is an exploratory representation-gradient similarity extension and is not part of the paper-facing result bundle. It scores existing Stage 1 adapters without retraining, sweeps training seeds and transformer layers, and aggregates the completed runs:
 
@@ -86,7 +86,7 @@ nohup env MODEL=qwen3-8b bash shell/run_llm_repsim_extension.sh \
 
 Useful overrides are `SEEDS`, `LAYERS`, `FORCE`, and `ALLOW_PARTIAL`. The default layers are `24 28 32 35`, and the aggregate is written to `outputs/<model_dir>/scienceqa_exp1_repsim_v2/aggregate.json`. This output does not affect the formal Stage 1 or Stage 2 aggregates.
 
-## Layout
+## 🗂️ Layout
 
 ```text
 datasets/scienceqa/      Frozen source, Stage 1, Stage 2, and references
