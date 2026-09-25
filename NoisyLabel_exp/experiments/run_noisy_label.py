@@ -6,7 +6,6 @@ import argparse
 import json
 from pathlib import Path
 import sys
-import time
 
 import numpy as np
 from scipy.stats import kendalltau

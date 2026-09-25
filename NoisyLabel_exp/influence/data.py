@@ -75,7 +75,6 @@ def _sample_corrupted_subset(
     if max_count is None or max_count >= available_indices.size:
         return available_indices
     rng = np.random.default_rng(seed)
-    class_counts = np.bincount(labels[available_indices], minlength=10)
     target_per_class = max_count // 10
     remainder = max_count - target_per_class * 10
     chosen: list[int] = []

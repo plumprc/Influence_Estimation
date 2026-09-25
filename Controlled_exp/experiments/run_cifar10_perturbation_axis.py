@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from influence.counterfactuals import (
     BEHAVIORS,
     cnn_ihvp_influences,
+    cnn_local_reopt_loo_influences,
     cnn_local_reopt_upweight_influences,
 )
 from influence.data import load_cifar10
@@ -136,9 +137,9 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir",
         default="outputs/cifar10/exp5b_cifar10_perturbation_axis/seed_0",
     )
-    parser.add_argument("--max-train", type=int, default=5000)
-    parser.add_argument("--num-queries", type=int, default=200)
-    parser.add_argument("--num-candidates", type=int, default=200)
+    parser.add_argument("--max-train", type=int, default=10000)
+    parser.add_argument("--num-queries", type=int, default=500)
+    parser.add_argument("--num-candidates", type=int, default=500)
     parser.add_argument("--l2", type=float, default=1e-4)
     parser.add_argument("--max-epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=128)
@@ -283,11 +284,36 @@ def main() -> None:
         key: _per_query_metrics(ihvp_np, value) for key, value in scores.items()
     }
 
+    started = time.perf_counter()
+    loo_all, loo_diagnostics, _ = cnn_local_reopt_loo_influences(
+        model,
+        data.train_x,
+        data.train_y,
+        query_x,
+        query_y,
+        candidate_indices=candidate_indices.tolist(),
+        l2=args.l2,
+        max_iter=args.reopt_max_iter,
+        lr=1.0,
+    )
+    timing["loo"] = time.perf_counter() - started
+    loo_np = loo_all[:, :, behavior_index].detach().cpu().numpy()
+    loo_vs_alpha = {
+        key: _per_query_metrics(loo_np, value) for key, value in scores.items()
+    }
+    loo_vs_ihvp = _per_query_metrics(loo_np, ihvp_np)
+    print(
+        f"LOO reoptimization: mean grad="
+        f"{loo_diagnostics['mean_final_gradient_norm']:.3e}, "
+        f"time={timing['loo']:.1f}s"
+    )
+
     _save_npz_atomic(
         output_dir / "scores.npz",
         behavior=args.behavior,
         alphas=np.asarray(alphas, dtype=np.float64),
         ihvp=ihvp_np,
+        loo=loo_np,
         candidates=candidates.detach().cpu().numpy(),
         query_indices=query_indices.detach().cpu().numpy(),
         **scores,
@@ -311,6 +337,10 @@ def main() -> None:
             "behavior": args.behavior,
             "perturbation": "finite upweight of a single example",
             "objective": "L_D(theta) + alpha * ell(z_k; theta)",
+            "leave_one_out": (
+                "local LBFGS reoptimization on the remaining examples, "
+                f"max_iter={args.reopt_max_iter}"
+            ),
             "transition": (
                 f"local LBFGS reoptimization from the refined factual model, "
                 f"max_iter={args.reopt_max_iter}"
@@ -325,6 +355,9 @@ def main() -> None:
         "reopt_diagnostics": diagnostics,
         "comparisons": comparisons,
         "inverse_hessian_approximation": approximation,
+        "loo_diagnostics": loo_diagnostics,
+        "loo_vs_alpha": loo_vs_alpha,
+        "loo_vs_ihvp": loo_vs_ihvp,
         "timing_seconds": {key: round(value, 3) for key, value in timing.items()},
     }
     _save_json_atomic(output_dir / "summary.json", summary)

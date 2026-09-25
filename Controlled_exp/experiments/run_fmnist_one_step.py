@@ -1,4 +1,4 @@
-"""Run the first controlled experiment for the influence paper.
+"""Run one-step FashionMNIST controlled experiments.
 
 The default run studies behavior-specification mismatch and first-order
 approximation error under a common one-step training counterfactual.  Optional
@@ -28,11 +28,15 @@ from influence.models import MultinomialLogisticRegression
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=PROJECT_ROOT / "datasets" / "FashionMNIST")
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "controlled_fashion")
-    parser.add_argument("--max-train", type=int, default=10000)
-    parser.add_argument("--max-test", type=int, default=100)
-    parser.add_argument("--num-queries", type=int, default=50)
-    parser.add_argument("--num-candidates", type=int, default=200)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_ROOT / "outputs" / "fashion_mnist" / "exp1_behavior",
+    )
+    parser.add_argument("--max-train", type=int, default=20000)
+    parser.add_argument("--max-test", type=int, default=2000)
+    parser.add_argument("--num-queries", type=int, default=1000)
+    parser.add_argument("--num-candidates", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--normalization", choices=("unit", "standard", "none"), default="unit")

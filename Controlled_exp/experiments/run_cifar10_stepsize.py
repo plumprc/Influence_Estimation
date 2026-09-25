@@ -53,9 +53,9 @@ def main():
     )
 
     # Data (smaller for sweep)
-    parser.add_argument("--max-train", type=int, default=2000)
-    parser.add_argument("--num-queries", type=int, default=300)
-    parser.add_argument("--num-candidates", type=int, default=300)
+    parser.add_argument("--max-train", type=int, default=10000)
+    parser.add_argument("--num-queries", type=int, default=500)
+    parser.add_argument("--num-candidates", type=int, default=500)
 
     # Model training
     parser.add_argument("--l2", type=float, default=1e-4)

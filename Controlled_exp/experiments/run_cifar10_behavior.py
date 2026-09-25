@@ -53,7 +53,7 @@ def main():
     )
 
     # Data
-    parser.add_argument("--max-train", type=int, default=5000)
+    parser.add_argument("--max-train", type=int, default=10000)
     parser.add_argument("--num-queries", type=int, default=500)
     parser.add_argument("--num-candidates", type=int, default=500)
 

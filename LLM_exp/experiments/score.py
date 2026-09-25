@@ -25,7 +25,7 @@ from influence.data import (
     RESPONSE_CORRUPTION_TASK,
     load_dataset,
 )
-from influence.metrics import detection_metrics, ranking_agreement
+from influence.metrics import benign_trigger_fpr, detection_metrics, ranking_agreement
 from influence.models import load_adapter
 from influence.scoring import (
     CountSketchProjection,
@@ -353,6 +353,17 @@ def main() -> None:
         }
         for target_name, labels in label_sets.items()
     }
+    if train.task == CONDITIONAL_BACKDOOR_TASK:
+        benign_trigger_labels = labels_trigger & ~labels_poison
+        for method, scores in methods.items():
+            for behavior_index, behavior in enumerate(BEHAVIOR_NAMES):
+                detection["poison_detection"][method][behavior]["bt_fpr"] = (
+                    benign_trigger_fpr(
+                        scores[:, min(behavior_index, scores.shape[1] - 1)],
+                        labels_poison,
+                        benign_trigger_labels,
+                    )
+                )
     agreement = {}
     for first_index, first_behavior in enumerate(BEHAVIOR_NAMES):
         for second_behavior in BEHAVIOR_NAMES[first_index + 1 :]:

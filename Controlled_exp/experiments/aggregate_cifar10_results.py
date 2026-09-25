@@ -12,7 +12,7 @@ from scipy import stats
 
 OUTPUT_BASE = Path(__file__).resolve().parent.parent / "outputs" / "cifar10"
 AGGREGATED_PATH = OUTPUT_BASE / "aggregated_results.json"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 9
 
 ETAS = (0.01, 0.05, 0.1, 0.3, 0.5)
 ALPHAS = (1e-5, 1e-3, 1e-1)
@@ -92,6 +92,21 @@ def _behavior_index(scores: dict[str, np.ndarray], behavior: str) -> int:
     if behavior not in behaviors:
         raise ValueError(f"Behavior {behavior!r} is missing from scores")
     return behaviors.index(behavior)
+
+
+def _negative_loss_scores(scores: dict[str, np.ndarray], values: np.ndarray) -> np.ndarray:
+    """Support both legacy all-behavior arrays and current single-behavior arrays."""
+
+    if "behavior" in scores:
+        behavior = str(scores["behavior"])
+        if behavior != "negative_loss":
+            raise ValueError(f"Exp5c currently aggregates negative_loss, found {behavior!r}")
+        if values.ndim == 2:
+            return values
+    elif values.ndim != 3:
+        raise ValueError("Exp5c scores must be two- or three-dimensional")
+
+    return values[:, :, BEHAVIOR_ORDER.index("negative_loss")]
 
 
 def _aggregate_metrics(summaries: list[dict], path) -> dict[str, dict]:
@@ -236,25 +251,14 @@ def aggregate_exp5c(seeds: list[int]) -> dict:
     }
     for seed_dir in seed_dirs:
         scores = _load_scores(seed_dir)
-        one_step = scores["exact_one_step"]
-        multi_step = scores["exact_multi_step"]
-        ihvp = scores["ihvp"]
-        behavior_index = BEHAVIOR_ORDER.index("negative_loss")
+        one_step = _negative_loss_scores(scores, scores["exact_one_step"])
+        multi_step = _negative_loss_scores(scores, scores["exact_multi_step"])
+        ihvp = _negative_loss_scores(scores, scores["ihvp"])
         comparisons["one_step_vs_multi_step"].append(
-            _portable_floats(
-                _per_query_taus(
-                    one_step[:, :, behavior_index],
-                    multi_step[:, :, behavior_index],
-                )
-            )
+            _portable_floats(_per_query_taus(one_step, multi_step))
         )
         comparisons["one_step_vs_ihvp"].append(
-            _portable_floats(
-                _per_query_taus(
-                    one_step[:, :, behavior_index],
-                    ihvp[:, :, behavior_index],
-                )
-            )
+            _portable_floats(_per_query_taus(one_step, ihvp))
         )
 
     return {
@@ -287,6 +291,8 @@ def aggregate_exp5b(seeds: list[int]) -> dict:
 
     pairwise: dict[tuple[float, float], list[list[float]]] = {}
     approximation: dict[float, list[list[float]]] = {}
+    loo_approximation: dict[float, list[list[float]]] = {}
+    loo_vs_ihvp: list[list[float]] = []
     for seed_dir in seed_dirs:
         scores = _load_scores(seed_dir)
         alphas = [float(value) for value in scores["alphas"]]
@@ -295,6 +301,13 @@ def aggregate_exp5b(seeds: list[int]) -> dict:
                 f"Unexpected alphas in {seed_dir}: expected {ALPHAS}, got {alphas}"
             )
         ihvp = scores["ihvp"]
+        if "loo" not in scores:
+            raise ValueError(f"Exp5b scores must contain loo in {seed_dir}")
+        loo = scores["loo"]
+        if loo.shape != ihvp.shape:
+            raise ValueError(
+                f"Exp5b LOO and inverse-Hessian scores have different shapes in {seed_dir}"
+            )
         alpha_scores = {
             alpha: scores[f"alpha_{alpha:.10g}"] for alpha in ALPHAS
         }
@@ -314,6 +327,10 @@ def aggregate_exp5b(seeds: list[int]) -> dict:
                     _per_query_taus(ihvp, alpha_scores[alpha])
                 )
             )
+            loo_approximation.setdefault(alpha, []).append(
+                _portable_floats(_per_query_taus(loo, alpha_scores[alpha]))
+            )
+        loo_vs_ihvp.append(_portable_floats(_per_query_taus(loo, ihvp)))
 
     return {
         "n_seeds": len(seed_dirs),
@@ -335,6 +352,19 @@ def aggregate_exp5b(seeds: list[int]) -> dict:
             }
             for alpha, values in approximation.items()
         },
+        "loo_approximation": {
+            f"{alpha:.10g}": {
+                **_mean_std_ci(_flatten_seed_values(values)),
+                "tau_by_seed": _flatten_seed_values(values),
+                "per_query_tau_by_seed": values,
+            }
+            for alpha, values in loo_approximation.items()
+        },
+        "loo_vs_ihvp": {
+            **_mean_std_ci(_flatten_seed_values(loo_vs_ihvp)),
+            "tau_by_seed": _flatten_seed_values(loo_vs_ihvp),
+            "per_query_tau_by_seed": loo_vs_ihvp,
+        },
         "summary": {
             "comparisons": {
                 key: _aggregate_metrics(
@@ -350,6 +380,17 @@ def aggregate_exp5b(seeds: list[int]) -> dict:
                 )
                 for key in summaries[0]["inverse_hessian_approximation"]
             },
+            "loo_vs_alpha": {
+                key: _aggregate_metrics(
+                    summaries,
+                    lambda summary, key=key: summary["loo_vs_alpha"][key],
+                )
+                for key in summaries[0]["loo_vs_alpha"]
+            },
+            "loo_vs_ihvp": _aggregate_metrics(
+                summaries,
+                lambda summary: summary["loo_vs_ihvp"],
+            ),
         },
     }
 
@@ -380,21 +421,23 @@ def _finding1_figure_data(
         )
 
     perturbation_pairs = (
-        ("perturbation_1e-3", 1e-5, 1e-3, r"$\alpha=10^{-3}$"),
-        ("perturbation_1e-1", 1e-5, 1e-1, r"$\alpha=10^{-1}$"),
+        ("upweight_1e-3_vs_loo", 1e-3, r"$\alpha=10^{-3}$"),
+        ("upweight_1e-1_vs_loo", 0.1, r"$\alpha=10^{-1}$"),
     )
-    for key, first_alpha, second_alpha, label in perturbation_pairs:
+    for key, alpha, label in perturbation_pairs:
+        alpha_key = f"{alpha:.10g}"
         comparisons.append(
             {
                 "key": key,
                 "axis": "P",
                 "label": label,
                 "seeds": exp5b["seeds"],
-                "base_alpha": first_alpha,
-                "alpha": second_alpha,
-                "tau_by_seed": exp5b["pairwise_kendall_tau"][
-                    f"{first_alpha:.10g}_vs_{second_alpha:.10g}"
-                ]["per_query_tau_by_seed"],
+                "alpha": alpha,
+                "reference": "local_loo_reoptimization",
+                "estimate": "local_upweight_reoptimization",
+                "tau_by_seed": exp5b["loo_approximation"][alpha_key][
+                    "per_query_tau_by_seed"
+                ],
             }
         )
 
@@ -459,8 +502,8 @@ def _validate_figure_data(figure: dict) -> None:
         "behavior_soft_margin",
         "behavior_hard_margin",
         "behavior_query_logit",
-        "perturbation_1e-3",
-        "perturbation_1e-1",
+        "upweight_1e-3_vs_loo",
+        "upweight_1e-1_vs_loo",
         "transition_multi_step",
         "transition_inverse_hessian",
     ]
@@ -512,6 +555,7 @@ def _validate_figure_data(figure: dict) -> None:
             raise ValueError(f"Reoptimization entry has invalid tau values: {item}")
 
 
+
 def figure_data(
     exp5a: dict,
     exp5b: dict,
@@ -548,8 +592,13 @@ def _parse_args() -> argparse.Namespace:
         "--single-seeds",
         nargs="+",
         type=int,
-        default=[0],
+        default=[0, 1, 2],
         help="Exact seed scope for 5b and 5c",
+    )
+    parser.add_argument(
+        "--merge-existing",
+        action="store_true",
+        help="Preserve experiment sections absent from --exps using the existing aggregate",
     )
     return parser.parse_args()
 
@@ -571,26 +620,40 @@ def main() -> None:
         raise ValueError("Seeds must be non-negative")
 
     aggregators = {
-        "5a": lambda: aggregate_exp5a(seeds),
-        "5b": lambda: aggregate_exp5b(single_seeds),
-        "5c": lambda: aggregate_exp5c(single_seeds),
-        "5d": lambda: aggregate_exp5d(seeds),
+        "exp5a_behavior": lambda: aggregate_exp5a(seeds),
+        "exp5b_perturbation_axis": lambda: aggregate_exp5b(single_seeds),
+        "exp5c_transition_axes": lambda: aggregate_exp5c(single_seeds),
+        "exp5d_stepsize": lambda: aggregate_exp5d(seeds),
+    }
+    experiment_names = {
+        "exp5a_behavior": "5a",
+        "exp5b_perturbation_axis": "5b",
+        "exp5c_transition_axes": "5c",
+        "exp5d_stepsize": "5d",
     }
     aggregated_experiments = {
-        key: aggregators[experiment]() for key, experiment in (
-            ("exp5a_behavior", "5a"),
-            ("exp5b_perturbation_axis", "5b"),
-            ("exp5c_transition_axes", "5c"),
-            ("exp5d_stepsize", "5d"),
-        ) if experiment in args.exps
+        key: aggregator()
+        for key, aggregator in aggregators.items()
+        if experiment_names[key] in args.exps
     }
 
-    if set(args.exps) == {"5a", "5b", "5c", "5d"}:
+    existing = {}
+    if args.merge_existing and AGGREGATED_PATH.exists():
+        with AGGREGATED_PATH.open(encoding="utf-8") as stream:
+            existing = json.load(stream)
+        missing_keys = set(aggregators) - set(aggregated_experiments)
+        aggregated_experiments.update(
+            {key: existing[key] for key in missing_keys if key in existing}
+        )
+
+    if set(aggregated_experiments) == set(aggregators):
         figure = figure_data(
-            exp5a=aggregated_experiments["exp5a_behavior"],
-            exp5b=aggregated_experiments["exp5b_perturbation_axis"],
-            exp5c=aggregated_experiments["exp5c_transition_axes"],
-            exp5d=aggregated_experiments["exp5d_stepsize"],
+            **{
+                "exp5a": aggregated_experiments["exp5a_behavior"],
+                "exp5b": aggregated_experiments["exp5b_perturbation_axis"],
+                "exp5c": aggregated_experiments["exp5c_transition_axes"],
+                "exp5d": aggregated_experiments["exp5d_stepsize"],
+            }
         )
     else:
         figure = {}
@@ -598,7 +661,9 @@ def main() -> None:
     aggregated = {
         "schema_version": SCHEMA_VERSION,
         "dataset": "cifar10",
-        "experiment_scope": args.exps,
+        "experiment_scope": sorted(
+            experiment_names[key] for key in aggregated_experiments
+        ),
         "seed_scope": {
             "5a_5d": seeds,
             "5b_5c": single_seeds,

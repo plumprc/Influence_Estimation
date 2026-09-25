@@ -56,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         default=(0.33, 0.66),
         help="Fractions of total optimizer steps at which to save TracIn checkpoints",
     )
+    parser.add_argument(
+        "--no-intermediate-checkpoints",
+        action="store_true",
+        help="Skip intermediate checkpoints for runs that only need the final adapter",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
@@ -67,7 +72,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if any(not 0.0 < fraction < 1.0 for fraction in args.checkpoint_fractions):
+    checkpoint_fractions = (
+        [] if args.no_intermediate_checkpoints else args.checkpoint_fractions
+    )
+    if any(not 0.0 < fraction < 1.0 for fraction in checkpoint_fractions):
         raise ValueError("Checkpoint fractions must be strictly between 0 and 1")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -117,7 +125,7 @@ def main() -> None:
     total_steps = max(1, len(loader) * args.epochs)
     checkpoint_steps = {
         max(1, min(total_steps, int(np.ceil(total_steps * fraction)))): fraction
-        for fraction in args.checkpoint_fractions
+        for fraction in checkpoint_fractions
     }
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -264,7 +272,7 @@ def main() -> None:
         "seed": args.seed,
         "steps": global_step,
         "checkpoint_learning_rate": last_step_lr,
-        "checkpoint_fractions": list(args.checkpoint_fractions),
+        "checkpoint_fractions": list(checkpoint_fractions),
         "checkpoints": saved_checkpoints,
         "training_state": "training_state.pt",
         "final_loss": float(losses[-1]) if losses else None,

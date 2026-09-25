@@ -51,6 +51,7 @@ def _is_metric_map(value: object) -> bool:
             "p_at_5pct",
             "p_at_10pct",
             "recall_at_true_count",
+            "bt_fpr",
         )
     )
 
@@ -123,6 +124,7 @@ def _aggregate_scores(runs: list[dict], output: Path) -> None:
                         "p_at_5pct",
                         "p_at_10pct",
                         "recall_at_true_count",
+                        "bt_fpr",
                     )
                 }
 

@@ -11,9 +11,25 @@ from matplotlib.colors import LinearSegmentedColormap
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AGGREGATE_PATH = (
-    PROJECT_ROOT / "outputs" / "qwen3_8b" / "scienceqa_exp1" / "aggregate.json"
-)
+AGGREGATE_PATHS = {
+    "qwen3_8b": (
+        PROJECT_ROOT / "outputs" / "qwen3_8b" / "scienceqa_exp1" / "aggregate.json"
+    ),
+    "gemma2_9b_it": (
+        PROJECT_ROOT
+        / "outputs"
+        / "gemma2_9b_it"
+        / "scienceqa_exp1"
+        / "aggregate.json"
+    ),
+    "llama3_1_8b": (
+        PROJECT_ROOT
+        / "outputs"
+        / "llama3_1_8b"
+        / "scienceqa_exp1"
+        / "aggregate.json"
+    ),
+}
 FIGURE_DIR = PROJECT_ROOT / "plot" / "figures"
 
 METHODS = (
@@ -52,6 +68,10 @@ TARGET_TITLES = {
     "answer_corruption": "Answer corruption",
     "rationale_corruption": "Rationale corruption",
 }
+MODEL_TITLES = {
+    "gemma2_9b_it": "Gemma-2-9B-it",
+    "llama3_1_8b": "Llama-3.1-8B-Instruct",
+}
 
 SOFT_REDS = LinearSegmentedColormap.from_list(
     "soft_reds",
@@ -59,8 +79,8 @@ SOFT_REDS = LinearSegmentedColormap.from_list(
 )
 
 
-def _load_values() -> dict[str, np.ndarray]:
-    with AGGREGATE_PATH.open(encoding="utf-8") as stream:
+def _load_values(model_name: str) -> dict[str, np.ndarray]:
+    with AGGREGATE_PATHS[model_name].open(encoding="utf-8") as stream:
         payload = json.load(stream)
     if payload.get("run_count") != 3:
         raise ValueError("Expected three seed runs in the exp1 aggregate")
@@ -142,7 +162,7 @@ def _draw_heatmap(
 
 
 def main() -> None:
-    values = _load_values()
+    values = _load_values("qwen3_8b")
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
 
     plt.rcParams.update({
@@ -172,6 +192,45 @@ def main() -> None:
     colorbar.outline.set_visible(False)
 
     output_stem = FIGURE_DIR / "scienceqa_exp1"
+    fig.savefig(f"{output_stem}.pdf", bbox_inches="tight")
+    fig.savefig(f"{output_stem}.png", bbox_inches="tight")
+    plt.close(fig)
+
+    supplementary_models = ("gemma2_9b_it", "llama3_1_8b")
+    supplementary_values = {
+        model_name: _load_values(model_name)
+        for model_name in supplementary_models
+    }
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(10.2, 8.0),
+        constrained_layout=True,
+    )
+    fig.get_layout_engine().set(wspace=0.20, hspace=0.08)
+    images = []
+    for index, (model_name, target) in enumerate(
+        (model_name, target)
+        for model_name in supplementary_models
+        for target in TARGETS
+    ):
+        row, column = divmod(index, 2)
+        image = _draw_heatmap(
+            axes[row, column],
+            supplementary_values[model_name][target],
+            f"{MODEL_TITLES[model_name]}\n{TARGET_TITLES[target]}",
+        )
+        images.append(image)
+        if column:
+            axes[row, column].set_yticklabels([])
+    axes[0, 0].set_ylabel("Method")
+    axes[1, 0].set_ylabel("Method")
+
+    colorbar = fig.colorbar(images[0], ax=axes, shrink=0.82, pad=0.02)
+    colorbar.set_label("AUPRC")
+    colorbar.outline.set_visible(False)
+
+    output_stem = FIGURE_DIR / "scienceqa_exp1_supplementary"
     fig.savefig(f"{output_stem}.pdf", bbox_inches="tight")
     fig.savefig(f"{output_stem}.png", bbox_inches="tight")
     plt.close(fig)

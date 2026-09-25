@@ -1,2 +1,26 @@
-__pycache__
-datasets
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Datasets
+datasets/
+
+# Experiment outputs: ignore seed-level runs, scores, and checkpoints,
+# but keep portable aggregate JSON bundles.
+**/outputs/**
+!**/outputs/**/
+!**/outputs/**/*aggregate*.json
+
+# Logs
+logs/
+*.log
+
+# Model and score artifacts outside outputs/
+*.pt
+*.npz
+*.safetensors
+*.bin
+
+# OS
+.DS_Store

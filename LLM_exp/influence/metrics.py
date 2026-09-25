@@ -62,6 +62,28 @@ def detection_metrics(scores: np.ndarray, labels: np.ndarray) -> dict[str, float
     }
 
 
+def benign_trigger_fpr(
+    scores: np.ndarray,
+    poison_labels: np.ndarray,
+    benign_trigger_labels: np.ndarray,
+) -> float | None:
+    """Fraction of benign-trigger examples in the top predicted-poison count."""
+    scores = np.asarray(scores, dtype=np.float64)
+    poison_labels = np.asarray(poison_labels, dtype=np.int8)
+    benign_trigger_labels = np.asarray(benign_trigger_labels, dtype=np.int8)
+    if scores.ndim != 1 or scores.shape != poison_labels.shape:
+        raise ValueError("Scores and poison labels must be matching one-dimensional arrays")
+    if poison_labels.shape != benign_trigger_labels.shape:
+        raise ValueError("Poison and benign-trigger labels must have the same shape")
+    if not np.isfinite(scores).all():
+        raise ValueError("Scores contain non-finite values")
+    poison_count = int(poison_labels.sum())
+    if poison_count == 0:
+        return None
+    top = np.argsort(-scores, kind="stable")[:poison_count]
+    return float(benign_trigger_labels[top].mean())
+
+
 def ranking_agreement(first: np.ndarray, second: np.ndarray) -> dict[str, float | None]:
     first = np.asarray(first, dtype=np.float64)
     second = np.asarray(second, dtype=np.float64)

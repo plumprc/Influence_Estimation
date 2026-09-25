@@ -16,7 +16,7 @@ OUTPUT_DIR = CODE_DIR / "outputs" / "cifar10"
 FIG_DIR = CODE_DIR / "plot" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 AGGREGATED_PATH = OUTPUT_DIR / "aggregated_results.json"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 9
 
 ETAS = (0.01, 0.05, 0.1, 0.3, 0.5)
 ALPHAS = (1e-5, 1e-3, 0.1)
@@ -26,8 +26,8 @@ FINDING1_COLORS = {
     "behavior_soft_margin": "#009E73",
     "behavior_hard_margin": "#E69F00",
     "behavior_query_logit": "#D55E00",
-    "perturbation_1e-3": "#0173B2",
-    "perturbation_1e-1": "#CA9161",
+    "upweight_1e-3_vs_loo": "#0173B2",
+    "upweight_1e-1_vs_loo": "#CA9161",
     "transition_multi_step": "#56B4E9",
     "transition_inverse_hessian": "#7570B3",
 }
@@ -267,6 +267,7 @@ def _draw_one_step(ax: plt.Axes, values: dict[str, np.ndarray]) -> None:
             lw=0,
         )
 
+    ax.grid(True, linestyle="--", alpha=0.6, linewidth=0.7)
     ax.set_xscale("log")
     ax.set_xlim(*_symmetric_log_limits(ETAS))
     ax.set_xticks(ETAS)
@@ -279,7 +280,7 @@ def _draw_reoptimization(ax: plt.Axes, values: dict[str, np.ndarray]) -> None:
     points = [_mean_and_ci(values[f"alpha__{alpha:.10g}"]) for alpha in ALPHAS]
     means = [point[0] for point in points]
     half_widths = [point[1] for point in points]
-    alpha_labels = [r"$10^{-5}$", r"$10^{-3}$", "0.1"]
+    alpha_labels = [r"$10^{-5}$", r"$10^{-3}$", r"$10^{-1}$"]
     ax.plot(
         ALPHAS,
         means,
@@ -287,7 +288,7 @@ def _draw_reoptimization(ax: plt.Axes, values: dict[str, np.ndarray]) -> None:
         ms=3.5,
         lw=1.5,
         color=FINDING2_COLORS["inverse_hessian"],
-        label="inverse-Hessian response",
+        label="inverse-Hessian",
     )
     ax.fill_between(
         ALPHAS,

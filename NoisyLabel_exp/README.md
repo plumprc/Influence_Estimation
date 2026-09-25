@@ -1,13 +1,10 @@
 # Noisy-Label Influence Experiments
 
-This directory contains the paper-facing noisy-label experiments on CIFAR-10.
-The paper-facing terms trusted loss and target logit are stored in code as
-`negative_loss` and `target_logit`, respectively.
+This directory contains the paper-facing noisy-label experiments on CIFAR-10. The paper-facing terms trusted loss and target logit are stored in code as `negative_loss` and `target_logit`, respectively.
 
 ## Setup
 
-The scripts use PyTorch, NumPy, SciPy, and Matplotlib. They expect the
-extracted CIFAR-10 batches under:
+The scripts use PyTorch, NumPy, SciPy, and Matplotlib. They expect the extracted CIFAR-10 batches under:
 
 ```text
 datasets/CIFAR10/cifar-10-batches-py/
@@ -21,8 +18,7 @@ Run the full pipeline from this directory:
 bash shell/run_noisy_label_exp.sh
 ```
 
-The pipeline executes the selected experiments, then performs the full formal
-aggregation and generates the report and final figure:
+The pipeline executes the selected experiments, then performs the full formal aggregation and generates the report and final figure:
 
 ```text
 exp1 main matrix -> exp2 architecture -> exp3 removal
@@ -44,10 +40,7 @@ EXPS="" bash shell/run_noisy_label_exp.sh       # aggregate and draw only
 FORCE=1 bash shell/run_noisy_label_exp.sh       # rerun complete outputs
 ```
 
-Supported overrides are `EXPS`, `RHOS`, `SEEDS`, `ARCH_MODELS`,
-`ARCH_SEEDS`, `REMOVAL_SEEDS`, `DATA_ROOT`, `DEVICE`, `FAMILIES`,
-`ALLOW_PARTIAL`, and `FORCE`. These experiments are long-running and should be
-launched manually.
+Supported overrides are `EXPS`, `RHOS`, `SEEDS`, `ARCH_MODELS`, `ARCH_SEEDS`, `REMOVAL_SEEDS`, `DATA_ROOT`, `DEVICE`, `FAMILIES`, `ALLOW_PARTIAL`, and `FORCE`. These experiments are long-running and should be launched manually.
 
 ## Outputs
 
@@ -57,9 +50,7 @@ The portable aggregate is:
 outputs/aggregated_results.json
 ```
 
-It contains run summaries, removal summaries, aggregate statistics, and
-completion metadata. Reports, figures, and statistical summaries depend only on
-this file, not on raw checkpoints or score files.
+It contains run summaries, removal summaries, aggregate statistics, and completion metadata. Reports, figures, and statistical summaries depend only on this file, not on raw checkpoints or score files.
 
 ```bash
 python experiments/build_noisy_label_report.py
@@ -73,5 +64,15 @@ outputs/noisy_label_report.md
 plot/figures/fig_noisy_label.{pdf,png}
 ```
 
-For project migration, copy the code and this aggregate. Raw outputs are needed
-only to resume or extend experiments.
+For project migration, copy the code and this aggregate. Raw outputs are needed only to resume or extend experiments.
+
+## Exploratory RepSim Extension
+
+`shell/run_repsim_extension.sh` is an isolated signal-augmented representation similarity experiment and is not part of the paper-facing result bundle. It trains the appendix ResNet-18 configuration, augments class-conditional representation kernels with training and behavior signals, and aggregates the selected seeds:
+
+```bash
+nohup bash shell/run_repsim_extension.sh \
+  > logs/repsim_extension_seeds012.log 2>&1 &
+```
+
+Useful overrides are `SEEDS`, `RHO`, `DEVICE`, `FORCE`, and `ALLOW_PARTIAL`. Results are written to `outputs/repsim_extension/aggregate.json` and do not modify the formal noisy-label aggregate.

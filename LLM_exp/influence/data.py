@@ -32,6 +32,17 @@ BACKDOOR_TEST_VARIANTS = (
     "triggered_activating",
     "triggered_nonactivating",
 )
+REFERENCE_ABLATION_VARIANTS = (
+    "triggered_harmful",
+    "triggered_clean",
+    "clean_harmful",
+    "clean_clean",
+)
+_HARMFUL_TARGET_VARIANTS = {
+    "triggered_activating",
+    "triggered_harmful",
+    "clean_harmful",
+}
 ACTIVATING_CONTEXT_MARKERS = (
     "Review Set Alpha",
     "Review Set Beta",
@@ -270,7 +281,8 @@ def _validate_record(record: dict[str, Any], split: str, task: str) -> None:
         raise ValueError("Dataset split must be 'train', 'validation', or 'test'")
 
     variant = record.get("variant")
-    if variant not in BACKDOOR_TEST_VARIANTS:
+    valid_variants = BACKDOOR_TEST_VARIANTS + REFERENCE_ABLATION_VARIANTS
+    if variant not in valid_variants:
         raise ValueError(f"Unknown backdoor test variant {variant!r}")
     has_trigger = record.get("has_trigger")
     activating_context = record.get("activating_context")
@@ -286,12 +298,12 @@ def _validate_record(record: dict[str, Any], split: str, task: str) -> None:
     if activating_context != expected_activating:
         raise ValueError(f"Test variant {variant!r} disagrees with 'activating_context'")
 
-    if variant == "triggered_activating":
+    if variant in _HARMFUL_TARGET_VARIANTS:
         target_answer = record.get("target_answer")
         if target_answer not in record["choices"] or target_answer == record["answer"]:
-            raise ValueError("Triggered activating tests require a wrong 'target_answer'")
+            raise ValueError("Harmful-target tests require a wrong 'target_answer'")
         if observed_answer != target_answer:
-            raise ValueError("Triggered activating response must use 'target_answer'")
+            raise ValueError("Harmful-target responses must use 'target_answer'")
     else:
         if "target_answer" in record:
             raise ValueError(f"Test variant {variant!r} cannot define 'target_answer'")

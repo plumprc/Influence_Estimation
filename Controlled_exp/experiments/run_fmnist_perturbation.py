@@ -29,6 +29,7 @@ from influence.counterfactuals import (
     BEHAVIORS,
     inverse_hessian_influences,
     newton_refine_factual,
+    newton_loo_influences,
     newton_reopt_influences,
 )
 from influence.data import load_fashion_mnist, resolve_device
@@ -44,10 +45,10 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "outputs" / "fashion_mnist" / "exp4_perturbation_scale",
     )
-    parser.add_argument("--max-train", type=int, default=5000)
-    parser.add_argument("--max-test", type=int, default=500)
-    parser.add_argument("--num-queries", type=int, default=500)
-    parser.add_argument("--num-candidates", type=int, default=500)
+    parser.add_argument("--max-train", type=int, default=20000)
+    parser.add_argument("--max-test", type=int, default=2000)
+    parser.add_argument("--num-queries", type=int, default=1000)
+    parser.add_argument("--num-candidates", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--normalization", choices=("unit", "standard", "none"), default="unit")
@@ -216,6 +217,33 @@ def main() -> None:
         for key, scores in scores_by_alpha.items()
     }
 
+    started = time.perf_counter()
+    loo_all, loo_diagnostics = newton_loo_influences(
+        model,
+        data.train_x,
+        data.train_y,
+        query_x,
+        query_y,
+        candidate_indices=candidate_indices.tolist(),
+        cholesky=refine["cholesky"],
+        tol=args.newton_tol,
+        max_iter=args.newton_max_iter,
+    )
+    timing["loo"] = time.perf_counter() - started
+    loo = loo_all[:, :, behavior_index].detach().cpu().numpy()
+    loo_vs_alpha = {
+        key: _per_query_metrics(torch.as_tensor(loo), torch.as_tensor(scores))
+        for key, scores in scores_by_alpha.items()
+    }
+    loo_vs_exact_if = _per_query_metrics(
+        torch.as_tensor(loo), torch.as_tensor(exact_if)
+    )
+    print(
+        f"LOO reoptimization: mean grad="
+        f"{loo_diagnostics['mean_candidate_gradient_norm']:.3e}, "
+        f"time={timing['loo']:.1f}s"
+    )
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         args.output_dir / "scores.npz",
@@ -224,6 +252,7 @@ def main() -> None:
         behavior=args.behavior,
         alphas=np.asarray(alphas, dtype=np.float64),
         exact_if=exact_if,
+        loo=loo,
         **scores_by_alpha,
     )
 
@@ -244,6 +273,7 @@ def main() -> None:
             "perturbation": "finite upweight of a single example",
             "objective": "L_D(theta) + alpha * ell(z_k; theta)",
             "inverse_hessian": "exact undamped inverse-Hessian response",
+            "leave_one_out": "re-optimized objective on the remaining examples",
             "transition": (
                 "Newton reoptimization with updated upweight Hessian"
                 if args.solver == "updated-hessian"
@@ -254,6 +284,9 @@ def main() -> None:
         "reopt_diagnostics": reopt_diagnostics,
         "comparisons": comparisons,
         "inverse_hessian_approximation": inverse_hessian_approximation,
+        "loo_diagnostics": loo_diagnostics,
+        "loo_vs_alpha": loo_vs_alpha,
+        "loo_vs_exact_if": loo_vs_exact_if,
         "timing_seconds": {key: round(value, 3) for key, value in timing.items()},
     }
     with (args.output_dir / "summary.json").open("w", encoding="utf-8") as stream:

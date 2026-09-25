@@ -25,6 +25,20 @@ cd "$CODE_DIR"
 
 failed=""
 
+data_ready() {
+  local raw_dir="$CODE_DIR/datasets/FashionMNIST/raw"
+  for file in \
+    train-images-idx3-ubyte train-labels-idx1-ubyte \
+    t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
+    [ -s "$raw_dir/$file" ] || return 1
+  done
+}
+
+if ! data_ready; then
+  echo "FashionMNIST IDX files are missing under datasets/FashionMNIST/raw/"
+  exit 1
+fi
+
 output_complete() {
   local directory="$1"
   [ -s "$directory/scores.npz" ] && [ -s "$directory/summary.json" ]
@@ -42,46 +56,49 @@ run_tracked() {
   fi
 }
 
+run_seed() {
+  local label="$1"
+  local output_dir="$2"
+  shift 2
+  if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
+    echo "Skipping $label (complete output)"
+  else
+    run_tracked "$label" "$@"
+  fi
+}
+
 exp1() {
   for seed in $SEEDS; do
     output_dir="$OUTPUT_BASE/exp1_behavior/seed_$seed"
-    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
-      echo "Skipping exp1 behavior seed=$seed (complete output)"
-    else
-      run_tracked "exp1 behavior seed=$seed" \
-        python experiments/run_controlled.py \
-          --max-train 20000 \
-          --max-test 2000 \
-          --num-queries 1000 \
-          --num-candidates 1000 \
-          --step-size 0.1 \
-          --seed "$seed" \
-          --device "$DEVICE" \
-          --output-dir "$output_dir"
-    fi
+    run_seed "exp1 behavior seed=$seed" "$output_dir" \
+      python experiments/run_fmnist_one_step.py \
+        --max-train 20000 \
+        --max-test 2000 \
+        --num-queries 1000 \
+        --num-candidates 1000 \
+        --step-size 0.1 \
+        --seed "$seed" \
+        --device "$DEVICE" \
+        --output-dir "$output_dir"
   done
 }
 
 exp2() {
   for seed in $SEEDS; do
     output_dir="$OUTPUT_BASE/exp2_transition/seed_$seed"
-    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
-      echo "Skipping exp2 transition seed=$seed (complete output)"
-    else
-      run_tracked "exp2 transition seed=$seed" \
-        python experiments/run_transitions.py \
-          --max-train 20000 \
-          --max-test 2000 \
-          --num-queries 1000 \
-          --num-candidates 1000 \
-          --step-size 0.1 \
-          --num-steps 5 \
-          --damping 0.01 \
-          --behavior negative_loss \
-          --seed "$seed" \
-          --device "$DEVICE" \
-          --output-dir "$output_dir"
-    fi
+    run_seed "exp2 transition seed=$seed" "$output_dir" \
+      python experiments/run_fmnist_transition.py \
+        --max-train 20000 \
+        --max-test 2000 \
+        --num-queries 1000 \
+        --num-candidates 1000 \
+        --step-size 0.1 \
+        --num-steps 5 \
+        --damping 0.01 \
+        --behavior negative_loss \
+        --seed "$seed" \
+        --device "$DEVICE" \
+        --output-dir "$output_dir"
   done
 }
 
@@ -89,20 +106,16 @@ exp3() {
   for eta in $ETAS; do
     for seed in $SEEDS; do
       output_dir="$OUTPUT_BASE/exp3_stepsize/eta_${eta}/seed_${seed}"
-      if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
-        echo "Skipping exp3 eta=$eta seed=$seed (complete output)"
-      else
-        run_tracked "exp3 eta=$eta seed=$seed" \
-          python experiments/run_controlled.py \
-            --max-train 20000 \
-            --max-test 2000 \
-            --num-queries 1000 \
-            --num-candidates 1000 \
-            --step-size "$eta" \
-            --seed "$seed" \
-            --device "$DEVICE" \
-            --output-dir "$output_dir"
-      fi
+      run_seed "exp3 eta=$eta seed=$seed" "$output_dir" \
+        python experiments/run_fmnist_one_step.py \
+          --max-train 20000 \
+          --max-test 2000 \
+          --num-queries 1000 \
+          --num-candidates 1000 \
+          --step-size "$eta" \
+          --seed "$seed" \
+          --device "$DEVICE" \
+          --output-dir "$output_dir"
     done
   done
 }
@@ -110,23 +123,19 @@ exp3() {
 exp4() {
   for seed in $SEEDS; do
     output_dir="$OUTPUT_BASE/exp4_perturbation_scale/seed_$seed"
-    if [ "$FORCE" != "1" ] && output_complete "$output_dir"; then
-      echo "Skipping exp4 perturbation seed=$seed (complete output)"
-    else
-      run_tracked "exp4 perturbation seed=$seed" \
-        python experiments/run_perturbation_scale.py \
-          --max-train 5000 \
-          --max-test 500 \
-          --num-queries 500 \
-          --num-candidates 500 \
-          --alphas $ALPHAS \
-          --behavior negative_loss \
-          --solver updated-hessian \
-          --newton-tol 1e-12 \
-          --seed "$seed" \
-          --device "$DEVICE" \
-          --output-dir "$output_dir"
-    fi
+    run_seed "exp4 perturbation seed=$seed" "$output_dir" \
+      python experiments/run_fmnist_perturbation.py \
+        --max-train 20000 \
+        --max-test 2000 \
+        --num-queries 1000 \
+        --num-candidates 1000 \
+        --alphas $ALPHAS \
+        --behavior negative_loss \
+        --solver updated-hessian \
+        --newton-tol 1e-12 \
+        --seed "$seed" \
+        --device "$DEVICE" \
+        --output-dir "$output_dir"
   done
 }
 
@@ -142,7 +151,7 @@ done
 
 if [ -z "$failed" ]; then
   echo "Aggregating FashionMNIST results..."
-  if python experiments/aggregate_results.py; then
+  if python experiments/aggregate_fmnist_results.py; then
     echo "Aggregation completed"
   else
     echo "Aggregation FAILED"
