@@ -48,9 +48,11 @@ The launchers skip completed seed-level outputs automatically, aggregate formal 
 
 ## 📚 Citation
 
+```
 @article{li2026influence,
   title={Which Influence Are We Estimating? The Role of Counterfactual Specifications in Data Attribution},
   author={Li, Zhe and Zhao, Wei and Zhang, Peixin and Sun, Jun},
   journal={arXiv preprint arXiv:2609.31214},
   year={2026}
 }
+```
