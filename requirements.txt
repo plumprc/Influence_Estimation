@@ -4,6 +4,9 @@ transformers==5.0.0
 peft==0.18.1
 datasets==4.8.5
 huggingface-hub==1.9.0
+# The `hf` CLI imports click directly, but typer (huggingface-hub's declared
+# dependency) no longer pulls it in as of typer 0.27.
+click==8.5.0
 numpy==1.26.4
 scipy==1.13.1
 scikit-learn==1.4.2
